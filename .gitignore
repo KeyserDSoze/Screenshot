@@ -1,0 +1,16 @@
+.vs/
+**/x64/
+**/ARM64/
+**/Debug/
+**/Release/
+**/obj/
+**/bin/
+*.user
+*.suo
+*.sys
+*.cat
+*.cer
+*.pdb
+*.tlog
+*.lastbuildstate
+Screenshots/
