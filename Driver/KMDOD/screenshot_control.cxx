@@ -5,7 +5,8 @@ namespace
 {
     PDEVICE_OBJECT g_ControlDevice = NULL;
     PDRIVER_OBJECT g_DriverObject = NULL;
-    BASIC_DISPLAY_DRIVER* volatile g_Adapter = NULL;
+    BASIC_DISPLAY_DRIVER* g_Adapter = NULL;
+    FAST_MUTEX g_AdapterMutex;
 
     PDRIVER_DISPATCH g_OriginalCreate = NULL;
     PDRIVER_DISPATCH g_OriginalClose = NULL;
@@ -52,14 +53,14 @@ namespace
         const ULONG code = stack->Parameters.DeviceIoControl.IoControlCode;
         const ULONG outputLength = stack->Parameters.DeviceIoControl.OutputBufferLength;
 
-        BASIC_DISPLAY_DRIVER* adapter =
-            reinterpret_cast<BASIC_DISPLAY_DRIVER*>(InterlockedCompareExchangePointer(
-                reinterpret_cast<PVOID volatile*>(&g_Adapter),
-                NULL,
-                NULL));
+        ExAcquireFastMutex(&g_AdapterMutex);
+        BASIC_DISPLAY_DRIVER* adapter = g_Adapter;
 
         if (adapter == NULL)
+        {
+            ExReleaseFastMutex(&g_AdapterMutex);
             return CompleteIrp(Irp, STATUS_DEVICE_NOT_READY, 0);
+        }
 
         if (code == IOCTL_SCREENSHOT_QUERY)
         {
@@ -73,26 +74,35 @@ namespace
                 reinterpret_cast<SCREENSHOT_FRAME_INFO*>(Irp->AssociatedIrp.SystemBuffer);
 
             NTSTATUS status = adapter->GetScreenshotInfo(info);
+            ExReleaseFastMutex(&g_AdapterMutex);
             return CompleteIrp(Irp, status, NT_SUCCESS(status) ? sizeof(SCREENSHOT_FRAME_INFO) : 0);
         }
 
         if (code == IOCTL_SCREENSHOT_CAPTURE)
         {
             if (Irp->MdlAddress == NULL)
+            {
+                ExReleaseFastMutex(&g_AdapterMutex);
                 return CompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0);
+            }
 
             PVOID output = MmGetSystemAddressForMdlSafe(
                 Irp->MdlAddress,
                 NormalPagePriority | MdlMappingNoExecute);
 
             if (output == NULL)
+            {
+                ExReleaseFastMutex(&g_AdapterMutex);
                 return CompleteIrp(Irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+            }
 
             ULONG bytesWritten = 0;
             NTSTATUS status = adapter->CopyScreenshotFrame(output, outputLength, &bytesWritten);
+            ExReleaseFastMutex(&g_AdapterMutex);
             return CompleteIrp(Irp, status, NT_SUCCESS(status) ? bytesWritten : 0);
         }
 
+        ExReleaseFastMutex(&g_AdapterMutex);
         return CompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0);
     }
 }
@@ -105,6 +115,7 @@ NTSTATUS ScreenshotControlInitialize(_In_ PDRIVER_OBJECT DriverObject)
     UNICODE_STRING deviceName = RTL_CONSTANT_STRING(L"\\Device\\KernelScreenshot");
 
     g_DriverObject = DriverObject;
+    ExInitializeFastMutex(&g_AdapterMutex);
     g_OriginalCreate = DriverObject->MajorFunction[IRP_MJ_CREATE];
     g_OriginalClose = DriverObject->MajorFunction[IRP_MJ_CLOSE];
     g_OriginalDeviceControl = DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL];
@@ -162,15 +173,17 @@ VOID ScreenshotControlShutdown()
 
 VOID ScreenshotControlSetAdapter(_In_opt_ BASIC_DISPLAY_DRIVER* Adapter)
 {
-    InterlockedExchangePointer(
-        reinterpret_cast<PVOID volatile*>(&g_Adapter),
-        reinterpret_cast<PVOID>(Adapter));
+    ExAcquireFastMutex(&g_AdapterMutex);
+    g_Adapter = Adapter;
+    ExReleaseFastMutex(&g_AdapterMutex);
 }
 
 VOID ScreenshotControlClearAdapter(_In_opt_ BASIC_DISPLAY_DRIVER* Adapter)
 {
-    InterlockedCompareExchangePointer(
-        reinterpret_cast<PVOID volatile*>(&g_Adapter),
-        NULL,
-        reinterpret_cast<PVOID>(Adapter));
+    ExAcquireFastMutex(&g_AdapterMutex);
+    if ((Adapter == NULL) || (g_Adapter == Adapter))
+    {
+        g_Adapter = NULL;
+    }
+    ExReleaseFastMutex(&g_AdapterMutex);
 }
