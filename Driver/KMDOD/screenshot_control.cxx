@@ -67,6 +67,7 @@ namespace
             if ((Irp->AssociatedIrp.SystemBuffer == NULL) ||
                 (outputLength < sizeof(SCREENSHOT_FRAME_INFO)))
             {
+                ExReleaseFastMutex(&g_AdapterMutex);
                 return CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL, sizeof(SCREENSHOT_FRAME_INFO));
             }
 
