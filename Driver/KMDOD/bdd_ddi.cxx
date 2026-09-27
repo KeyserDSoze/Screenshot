@@ -119,7 +119,6 @@ BddDdiAddDevice(
     }
 
     *ppDeviceContext = pBDD;
-    ScreenshotControlSetAdapter(pBDD);
 
     return STATUS_SUCCESS;
 }
@@ -154,7 +153,12 @@ BddDdiStartDevice(
     BDD_ASSERT_CHK(pDeviceContext != NULL);
 
     BASIC_DISPLAY_DRIVER* pBDD = reinterpret_cast<BASIC_DISPLAY_DRIVER*>(pDeviceContext);
-    return pBDD->StartDevice(pDxgkStartInfo, pDxgkInterface, pNumberOfViews, pNumberOfChildren);
+    NTSTATUS status = pBDD->StartDevice(pDxgkStartInfo, pDxgkInterface, pNumberOfViews, pNumberOfChildren);
+    if (NT_SUCCESS(status))
+    {
+        ScreenshotControlSetAdapter(pBDD);
+    }
+    return status;
 }
 
 NTSTATUS
@@ -165,6 +169,7 @@ BddDdiStopDevice(
     BDD_ASSERT_CHK(pDeviceContext != NULL);
 
     BASIC_DISPLAY_DRIVER* pBDD = reinterpret_cast<BASIC_DISPLAY_DRIVER*>(pDeviceContext);
+    ScreenshotControlClearAdapter(pBDD);
     return pBDD->StopDevice();
 }
 
