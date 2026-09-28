@@ -31,7 +31,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine("Cannot open \\.\\KernelScreenshot.");
+            Console.Error.WriteLine(@"Cannot open \\.\KernelScreenshot (driver control device not present).");
             Console.Error.WriteLine(ex.Message);
             Environment.ExitCode = 2;
             return;
