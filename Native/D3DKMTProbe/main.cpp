@@ -1,13 +1,20 @@
 #include <windows.h>
 #include <winternl.h>
 #include <d3dkmthk.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
+#include <wrl/client.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
+
+using Microsoft::WRL::ComPtr;
 
 namespace
 {
@@ -91,6 +98,13 @@ namespace
                 }
             }
         }
+        return out.str();
+    }
+
+    std::string HResultText(HRESULT hr)
+    {
+        std::ostringstream out;
+        out << "0x" << std::hex << std::uppercase << static_cast<unsigned long>(hr);
         return out.str();
     }
 
@@ -239,54 +253,367 @@ namespace
         }
         std::cout << "]\n";
     }
-}
 
-int main()
-{
-    D3DKMT_ENUMADAPTERS2 enumeration = {};
-    NTSTATUS status = D3DKMTEnumAdapters2(&enumeration);
-    if (!NtSuccess(status))
+    bool SameLuid(const LUID& left, LONG highPart, ULONG lowPart)
     {
-        std::cerr << "D3DKMTEnumAdapters2(size) failed: 0x"
-                  << std::hex << static_cast<ULONG>(status) << std::dec << "\n";
-        return 1;
+        return left.HighPart == highPart && left.LowPart == lowPart;
     }
 
-    if (enumeration.NumAdapters == 0)
+    bool SaveBgra32Bmp(
+        const std::filesystem::path& path,
+        UINT width,
+        UINT height,
+        const D3D11_MAPPED_SUBRESOURCE& mapped)
     {
-        std::cout << "[]\n";
+        const ULONGLONG tightStride64 = static_cast<ULONGLONG>(width) * 4ull;
+        const ULONGLONG imageBytes64 = tightStride64 * static_cast<ULONGLONG>(height);
+        const ULONGLONG fileBytes64 = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + imageBytes64;
+
+        if (tightStride64 > MAXDWORD || imageBytes64 > MAXDWORD || fileBytes64 > MAXDWORD)
+            return false;
+
+        const DWORD tightStride = static_cast<DWORD>(tightStride64);
+        const DWORD imageBytes = static_cast<DWORD>(imageBytes64);
+
+        BITMAPFILEHEADER fileHeader = {};
+        fileHeader.bfType = 0x4D42;
+        fileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        fileHeader.bfSize = static_cast<DWORD>(fileBytes64);
+
+        BITMAPINFOHEADER infoHeader = {};
+        infoHeader.biSize = sizeof(infoHeader);
+        infoHeader.biWidth = static_cast<LONG>(width);
+        infoHeader.biHeight = static_cast<LONG>(height);
+        infoHeader.biPlanes = 1;
+        infoHeader.biBitCount = 32;
+        infoHeader.biCompression = BI_RGB;
+        infoHeader.biSizeImage = imageBytes;
+
+        std::ofstream file(path, std::ios::binary);
+        if (!file)
+            return false;
+
+        file.write(reinterpret_cast<const char*>(&fileHeader), sizeof(fileHeader));
+        file.write(reinterpret_cast<const char*>(&infoHeader), sizeof(infoHeader));
+
+        const BYTE* base = static_cast<const BYTE*>(mapped.pData);
+        for (UINT y = 0; y < height; ++y)
+        {
+            const UINT sourceY = height - 1 - y;
+            const BYTE* row = base + static_cast<SIZE_T>(sourceY) * mapped.RowPitch;
+            file.write(reinterpret_cast<const char*>(row), tightStride);
+        }
+
+        return file.good();
+    }
+
+    struct FrameGuard
+    {
+        IDXGIOutputDuplication* Duplication = nullptr;
+        bool Acquired = false;
+
+        ~FrameGuard()
+        {
+            if (Acquired && Duplication != nullptr)
+                Duplication->ReleaseFrame();
+        }
+    };
+
+    int CaptureByLuid(
+        LONG highPart,
+        ULONG lowPart,
+        const std::filesystem::path& outputPath)
+    {
+        ComPtr<IDXGIFactory1> factory;
+        HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf()));
+        if (FAILED(hr))
+        {
+            std::cerr << "CreateDXGIFactory1 failed: " << HResultText(hr) << "\n";
+            return 20;
+        }
+
+        ComPtr<IDXGIAdapter1> selectedAdapter;
+        DXGI_ADAPTER_DESC1 selectedDesc = {};
+
+        for (UINT adapterIndex = 0;; ++adapterIndex)
+        {
+            ComPtr<IDXGIAdapter1> candidate;
+            hr = factory->EnumAdapters1(adapterIndex, candidate.GetAddressOf());
+            if (hr == DXGI_ERROR_NOT_FOUND)
+                break;
+            if (FAILED(hr))
+            {
+                std::cerr << "EnumAdapters1 failed: " << HResultText(hr) << "\n";
+                return 21;
+            }
+
+            DXGI_ADAPTER_DESC1 desc = {};
+            hr = candidate->GetDesc1(&desc);
+            if (FAILED(hr))
+                continue;
+
+            if (SameLuid(desc.AdapterLuid, highPart, lowPart))
+            {
+                selectedAdapter = candidate;
+                selectedDesc = desc;
+                break;
+            }
+        }
+
+        if (selectedAdapter == nullptr)
+        {
+            std::cerr << "No DXGI adapter matched the selected D3DKMT LUID.\n";
+            return 22;
+        }
+
+        ComPtr<ID3D11Device> device;
+        ComPtr<ID3D11DeviceContext> context;
+        D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_9_1;
+
+        hr = D3D11CreateDevice(
+            selectedAdapter.Get(),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            nullptr,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            nullptr,
+            0,
+            D3D11_SDK_VERSION,
+            device.GetAddressOf(),
+            &featureLevel,
+            context.GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            std::cerr << "D3D11CreateDevice failed: " << HResultText(hr) << "\n";
+            return 23;
+        }
+
+        ComPtr<IDXGIOutput> selectedOutput;
+        DXGI_OUTPUT_DESC outputDesc = {};
+        ComPtr<IDXGIOutputDuplication> duplication;
+
+        for (UINT outputIndex = 0;; ++outputIndex)
+        {
+            ComPtr<IDXGIOutput> candidateOutput;
+            hr = selectedAdapter->EnumOutputs(outputIndex, candidateOutput.GetAddressOf());
+            if (hr == DXGI_ERROR_NOT_FOUND)
+                break;
+            if (FAILED(hr))
+            {
+                std::cerr << "EnumOutputs failed: " << HResultText(hr) << "\n";
+                return 24;
+            }
+
+            DXGI_OUTPUT_DESC candidateDesc = {};
+            hr = candidateOutput->GetDesc(&candidateDesc);
+            if (FAILED(hr) || !candidateDesc.AttachedToDesktop)
+                continue;
+
+            ComPtr<IDXGIOutput1> output1;
+            hr = candidateOutput.As(&output1);
+            if (FAILED(hr))
+                continue;
+
+            ComPtr<IDXGIOutputDuplication> candidateDuplication;
+            hr = output1->DuplicateOutput(device.Get(), candidateDuplication.GetAddressOf());
+            if (FAILED(hr))
+                continue;
+
+            selectedOutput = candidateOutput;
+            outputDesc = candidateDesc;
+            duplication = candidateDuplication;
+            break;
+        }
+
+        if (duplication == nullptr)
+        {
+            std::cerr
+                << "No attached desktop output on the selected adapter could be duplicated. "
+                << "The output may be inactive, protected, or unavailable.\n";
+            return 25;
+        }
+
+        DXGI_OUTDUPL_DESC duplicationDesc = {};
+        duplication->GetDesc(&duplicationDesc);
+
+        DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
+        ComPtr<IDXGIResource> desktopResource;
+
+        for (int attempt = 0; attempt < 5; ++attempt)
+        {
+            hr = duplication->AcquireNextFrame(
+                1000,
+                &frameInfo,
+                desktopResource.GetAddressOf());
+
+            if (hr == DXGI_ERROR_WAIT_TIMEOUT)
+                continue;
+
+            break;
+        }
+
+        if (FAILED(hr))
+        {
+            std::cerr << "AcquireNextFrame failed: " << HResultText(hr) << "\n";
+            return 26;
+        }
+
+        FrameGuard frameGuard{duplication.Get(), true};
+
+        ComPtr<ID3D11Texture2D> desktopTexture;
+        hr = desktopResource.As(&desktopTexture);
+        if (FAILED(hr))
+        {
+            std::cerr << "Desktop resource is not an ID3D11Texture2D: " << HResultText(hr) << "\n";
+            return 27;
+        }
+
+        D3D11_TEXTURE2D_DESC textureDesc = {};
+        desktopTexture->GetDesc(&textureDesc);
+
+        if (textureDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM)
+        {
+            std::cerr << "Unexpected desktop duplication format: " << static_cast<unsigned int>(textureDesc.Format) << "\n";
+            return 28;
+        }
+
+        D3D11_TEXTURE2D_DESC stagingDesc = textureDesc;
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.BindFlags = 0;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stagingDesc.MiscFlags = 0;
+
+        ComPtr<ID3D11Texture2D> stagingTexture;
+        hr = device->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.GetAddressOf());
+        if (FAILED(hr))
+        {
+            std::cerr << "CreateTexture2D(staging) failed: " << HResultText(hr) << "\n";
+            return 29;
+        }
+
+        context->CopyResource(stagingTexture.Get(), desktopTexture.Get());
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = context->Map(stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr))
+        {
+            std::cerr << "Map(staging) failed: " << HResultText(hr) << "\n";
+            return 30;
+        }
+
+        const bool saved = SaveBgra32Bmp(
+            outputPath,
+            textureDesc.Width,
+            textureDesc.Height,
+            mapped);
+
+        context->Unmap(stagingTexture.Get(), 0);
+
+        if (!saved)
+        {
+            std::cerr << "Could not write BMP output file.\n";
+            return 31;
+        }
+
+        const std::string adapterName = WideToUtf8(selectedDesc.Description);
+        const std::string displayName = WideToUtf8(outputDesc.DeviceName);
+        const std::string pathUtf8 = WideToUtf8(outputPath.c_str());
+
+        std::cout
+            << "{"
+            << "\"ok\":true"
+            << ",\"adapter\":\"" << JsonEscape(adapterName) << "\""
+            << ",\"output\":\"" << JsonEscape(displayName) << "\""
+            << ",\"path\":\"" << JsonEscape(pathUtf8) << "\""
+            << ",\"width\":" << textureDesc.Width
+            << ",\"height\":" << textureDesc.Height
+            << ",\"rotation\":" << static_cast<unsigned int>(duplicationDesc.Rotation)
+            << ",\"featureLevel\":" << static_cast<unsigned int>(featureLevel)
+            << "}\n";
+
         return 0;
     }
 
-    std::vector<D3DKMT_ADAPTERINFO> adapters(enumeration.NumAdapters);
-    enumeration.pAdapters = adapters.data();
-
-    status = D3DKMTEnumAdapters2(&enumeration);
-    if (!NtSuccess(status))
+    int EnumerateAdapters()
     {
-        std::cerr << "D3DKMTEnumAdapters2(data) failed: 0x"
-                  << std::hex << static_cast<ULONG>(status) << std::dec << "\n";
-        return 2;
+        D3DKMT_ENUMADAPTERS2 enumeration = {};
+        NTSTATUS status = D3DKMTEnumAdapters2(&enumeration);
+        if (!NtSuccess(status))
+        {
+            std::cerr << "D3DKMTEnumAdapters2(size) failed: 0x"
+                      << std::hex << static_cast<ULONG>(status) << std::dec << "\n";
+            return 1;
+        }
+
+        if (enumeration.NumAdapters == 0)
+        {
+            std::cout << "[]\n";
+            return 0;
+        }
+
+        std::vector<D3DKMT_ADAPTERINFO> adapters(enumeration.NumAdapters);
+        enumeration.pAdapters = adapters.data();
+
+        status = D3DKMTEnumAdapters2(&enumeration);
+        if (!NtSuccess(status))
+        {
+            std::cerr << "D3DKMTEnumAdapters2(data) failed: 0x"
+                      << std::hex << static_cast<ULONG>(status) << std::dec << "\n";
+            return 2;
+        }
+
+        adapters.resize(enumeration.NumAdapters);
+
+        std::vector<ProbeResult> results;
+        results.reserve(adapters.size());
+
+        for (ULONG i = 0; i < static_cast<ULONG>(adapters.size()); ++i)
+        {
+            results.push_back(InspectAdapter(i, adapters[i]));
+        }
+
+        PrintJson(results);
+
+        for (const auto& adapter : adapters)
+        {
+            D3DKMT_CLOSEADAPTER closeAdapter = {};
+            closeAdapter.hAdapter = adapter.hAdapter;
+            D3DKMTCloseAdapter(&closeAdapter);
+        }
+
+        return 0;
+    }
+}
+
+int wmain(int argc, wchar_t** argv)
+{
+    if (argc == 1)
+        return EnumerateAdapters();
+
+    if (argc == 5 && wcscmp(argv[1], L"--capture-luid") == 0)
+    {
+        wchar_t* highEnd = nullptr;
+        wchar_t* lowEnd = nullptr;
+
+        const long highPart = wcstol(argv[2], &highEnd, 10);
+        const unsigned long lowPart = wcstoul(argv[3], &lowEnd, 10);
+
+        if (highEnd == argv[2] || *highEnd != L'\0' ||
+            lowEnd == argv[3] || *lowEnd != L'\0')
+        {
+            std::cerr << "Invalid LUID arguments.\n";
+            return 40;
+        }
+
+        return CaptureByLuid(
+            static_cast<LONG>(highPart),
+            static_cast<ULONG>(lowPart),
+            std::filesystem::path(argv[4]));
     }
 
-    adapters.resize(enumeration.NumAdapters);
-
-    std::vector<ProbeResult> results;
-    results.reserve(adapters.size());
-
-    for (ULONG i = 0; i < static_cast<ULONG>(adapters.size()); ++i)
-    {
-        results.push_back(InspectAdapter(i, adapters[i]));
-    }
-
-    PrintJson(results);
-
-    for (const auto& adapter : adapters)
-    {
-        D3DKMT_CLOSEADAPTER closeAdapter = {};
-        closeAdapter.hAdapter = adapter.hAdapter;
-        D3DKMTCloseAdapter(&closeAdapter);
-    }
-
-    return 0;
+    std::cerr
+        << "Usage:\n"
+        << "  D3DKMTProbe.exe\n"
+        << "  D3DKMTProbe.exe --capture-luid <highPart> <lowPart> <output.bmp>\n";
+    return 41;
 }
