@@ -5,7 +5,16 @@
 #include <d3dkmthk.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <dxgi1_5.h>
+#include <roapi.h>
+#include <windows.graphics.capture.interop.h>
+#include <windows.graphics.directx.direct3d11.interop.h>
 #include <wrl/client.h>
+
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/Windows.Graphics.DirectX.h>
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 
 #include <algorithm>
 #include <cstring>
@@ -453,6 +462,433 @@ namespace
         }
     };
 
+
+    struct RoGuard
+    {
+        bool ShouldUninitialize = false;
+
+        ~RoGuard()
+        {
+            if (ShouldUninitialize)
+                RoUninitialize();
+        }
+    };
+
+    struct HandleGuard
+    {
+        HANDLE Value = nullptr;
+
+        ~HandleGuard()
+        {
+            if (Value != nullptr)
+                CloseHandle(Value);
+        }
+    };
+
+    int TextureToBmp(
+        ID3D11Device* device,
+        ID3D11DeviceContext* context,
+        ID3D11Texture2D* sourceTexture,
+        std::vector<uint8_t>& bmpBytes,
+        std::string& errorText)
+    {
+        if (device == nullptr ||
+            context == nullptr ||
+            sourceTexture == nullptr)
+        {
+            errorText = "TextureToBmp received a null D3D object.";
+            return KS_CAPTURE_FAILED;
+        }
+
+        D3D11_TEXTURE2D_DESC textureDesc = {};
+        sourceTexture->GetDesc(&textureDesc);
+
+        if (textureDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM)
+        {
+            errorText =
+                "Unexpected capture pixel format: " +
+                std::to_string(static_cast<unsigned int>(textureDesc.Format));
+            return KS_CAPTURE_FAILED;
+        }
+
+        D3D11_TEXTURE2D_DESC stagingDesc = textureDesc;
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.BindFlags = 0;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stagingDesc.MiscFlags = 0;
+
+        ComPtr<ID3D11Texture2D> stagingTexture;
+        HRESULT hr = device->CreateTexture2D(
+            &stagingDesc,
+            nullptr,
+            stagingTexture.GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            errorText =
+                "CreateTexture2D(staging) failed: " +
+                HResultText(hr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        context->CopyResource(stagingTexture.Get(), sourceTexture);
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = context->Map(
+            stagingTexture.Get(),
+            0,
+            D3D11_MAP_READ,
+            0,
+            &mapped);
+
+        if (FAILED(hr))
+        {
+            errorText =
+                "Map(staging) failed: " +
+                HResultText(hr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        const uint64_t tightStride64 =
+            static_cast<uint64_t>(textureDesc.Width) * 4ull;
+        const uint64_t imageBytes64 =
+            tightStride64 * static_cast<uint64_t>(textureDesc.Height);
+        const uint64_t fileBytes64 =
+            sizeof(BITMAPFILEHEADER) +
+            sizeof(BITMAPINFOHEADER) +
+            imageBytes64;
+
+        if (tightStride64 > UINT32_MAX ||
+            imageBytes64 > UINT32_MAX ||
+            fileBytes64 > UINT32_MAX)
+        {
+            context->Unmap(stagingTexture.Get(), 0);
+            errorText =
+                "Captured image is too large for the current BMP API.";
+            return KS_CAPTURE_FAILED;
+        }
+
+        const uint32_t tightStride =
+            static_cast<uint32_t>(tightStride64);
+        const uint32_t imageBytes =
+            static_cast<uint32_t>(imageBytes64);
+        const uint32_t fileBytes =
+            static_cast<uint32_t>(fileBytes64);
+
+        bmpBytes.assign(fileBytes, 0);
+
+        BITMAPFILEHEADER fileHeader = {};
+        fileHeader.bfType = 0x4D42;
+        fileHeader.bfOffBits =
+            sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        fileHeader.bfSize = fileBytes;
+
+        BITMAPINFOHEADER infoHeader = {};
+        infoHeader.biSize = sizeof(infoHeader);
+        infoHeader.biWidth =
+            static_cast<LONG>(textureDesc.Width);
+        infoHeader.biHeight =
+            static_cast<LONG>(textureDesc.Height);
+        infoHeader.biPlanes = 1;
+        infoHeader.biBitCount = 32;
+        infoHeader.biCompression = BI_RGB;
+        infoHeader.biSizeImage = imageBytes;
+
+        std::memcpy(
+            bmpBytes.data(),
+            &fileHeader,
+            sizeof(fileHeader));
+
+        std::memcpy(
+            bmpBytes.data() + sizeof(fileHeader),
+            &infoHeader,
+            sizeof(infoHeader));
+
+        uint8_t* destination =
+            bmpBytes.data() +
+            sizeof(BITMAPFILEHEADER) +
+            sizeof(BITMAPINFOHEADER);
+
+        const uint8_t* source =
+            static_cast<const uint8_t*>(mapped.pData);
+
+        for (UINT y = 0; y < textureDesc.Height; ++y)
+        {
+            const UINT sourceY =
+                textureDesc.Height - 1 - y;
+
+            std::memcpy(
+                destination +
+                    static_cast<size_t>(y) * tightStride,
+                source +
+                    static_cast<size_t>(sourceY) * mapped.RowPitch,
+                tightStride);
+        }
+
+        context->Unmap(stagingTexture.Get(), 0);
+        return KS_OK;
+    }
+
+    int CaptureMonitorWithWindowsGraphicsCapture(
+        HMONITOR monitor,
+        std::vector<uint8_t>& bmpBytes,
+        std::string& errorText)
+    {
+        if (monitor == nullptr)
+        {
+            errorText =
+                "Windows Graphics Capture fallback received a null monitor.";
+            return KS_CAPTURE_FAILED;
+        }
+
+        const HRESULT roHr =
+            RoInitialize(RO_INIT_MULTITHREADED);
+
+        RoGuard roGuard{
+            SUCCEEDED(roHr)
+        };
+
+        if (FAILED(roHr) &&
+            roHr != RPC_E_CHANGED_MODE)
+        {
+            errorText =
+                "RoInitialize failed: " +
+                HResultText(roHr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        try
+        {
+            using namespace winrt::Windows::Graphics;
+            using namespace winrt::Windows::Graphics::Capture;
+            using namespace winrt::Windows::Graphics::DirectX;
+            using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
+
+            if (!GraphicsCaptureSession::IsSupported())
+            {
+                errorText =
+                    "Windows Graphics Capture is not supported.";
+                return KS_CAPTURE_FAILED;
+            }
+
+            ComPtr<ID3D11Device> d3dDevice;
+            ComPtr<ID3D11DeviceContext> d3dContext;
+            D3D_FEATURE_LEVEL featureLevel =
+                D3D_FEATURE_LEVEL_9_1;
+
+            HRESULT hr = D3D11CreateDevice(
+                nullptr,
+                D3D_DRIVER_TYPE_HARDWARE,
+                nullptr,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                nullptr,
+                0,
+                D3D11_SDK_VERSION,
+                d3dDevice.GetAddressOf(),
+                &featureLevel,
+                d3dContext.GetAddressOf());
+
+            if (FAILED(hr))
+            {
+                hr = D3D11CreateDevice(
+                    nullptr,
+                    D3D_DRIVER_TYPE_WARP,
+                    nullptr,
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    nullptr,
+                    0,
+                    D3D11_SDK_VERSION,
+                    d3dDevice.ReleaseAndGetAddressOf(),
+                    &featureLevel,
+                    d3dContext.ReleaseAndGetAddressOf());
+            }
+
+            if (FAILED(hr))
+            {
+                errorText =
+                    "Windows Graphics Capture D3D11CreateDevice failed: " +
+                    HResultText(hr);
+                return KS_CAPTURE_FAILED;
+            }
+
+            ComPtr<IDXGIDevice> dxgiDevice;
+            hr = d3dDevice.As(&dxgiDevice);
+            if (FAILED(hr))
+            {
+                errorText =
+                    "Windows Graphics Capture IDXGIDevice query failed: " +
+                    HResultText(hr);
+                return KS_CAPTURE_FAILED;
+            }
+
+            winrt::com_ptr<IInspectable> inspectableDevice;
+            hr = CreateDirect3D11DeviceFromDXGIDevice(
+                dxgiDevice.Get(),
+                inspectableDevice.put());
+
+            if (FAILED(hr))
+            {
+                errorText =
+                    "CreateDirect3D11DeviceFromDXGIDevice failed: " +
+                    HResultText(hr);
+                return KS_CAPTURE_FAILED;
+            }
+
+            auto runtimeDevice =
+                inspectableDevice.as<IDirect3DDevice>();
+
+            auto itemInterop =
+                winrt::get_activation_factory<
+                    GraphicsCaptureItem,
+                    IGraphicsCaptureItemInterop>();
+
+            GraphicsCaptureItem item{nullptr};
+            hr = itemInterop->CreateForMonitor(
+                monitor,
+                winrt::guid_of<GraphicsCaptureItem>(),
+                winrt::put_abi(item));
+
+            if (FAILED(hr))
+            {
+                errorText =
+                    "GraphicsCaptureItem::CreateForMonitor failed: " +
+                    HResultText(hr);
+                return KS_CAPTURE_FAILED;
+            }
+
+            const SizeInt32 size = item.Size();
+            if (size.Width <= 0 || size.Height <= 0)
+            {
+                errorText =
+                    "Windows Graphics Capture returned an invalid monitor size.";
+                return KS_CAPTURE_FAILED;
+            }
+
+            auto framePool =
+                Direct3D11CaptureFramePool::CreateFreeThreaded(
+                    runtimeDevice,
+                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                    2,
+                    size);
+
+            auto session =
+                framePool.CreateCaptureSession(item);
+
+            HandleGuard frameEvent{
+                CreateEventW(
+                    nullptr,
+                    FALSE,
+                    FALSE,
+                    nullptr)
+            };
+
+            if (frameEvent.Value == nullptr)
+            {
+                errorText =
+                    "CreateEvent failed for Windows Graphics Capture.";
+                return KS_CAPTURE_FAILED;
+            }
+
+            const auto token =
+                framePool.FrameArrived(
+                    [eventHandle = frameEvent.Value](
+                        Direct3D11CaptureFramePool const&,
+                        winrt::Windows::Foundation::IInspectable const&)
+                    {
+                        SetEvent(eventHandle);
+                    });
+
+            session.StartCapture();
+
+            const DWORD waitResult =
+                WaitForSingleObject(
+                    frameEvent.Value,
+                    3000);
+
+            framePool.FrameArrived(token);
+
+            if (waitResult != WAIT_OBJECT_0)
+            {
+                session.Close();
+                framePool.Close();
+
+                errorText =
+                    waitResult == WAIT_TIMEOUT
+                    ? "Windows Graphics Capture timed out waiting for a frame."
+                    : "Windows Graphics Capture wait failed.";
+                return KS_CAPTURE_FAILED;
+            }
+
+            auto frame =
+                framePool.TryGetNextFrame();
+
+            if (frame == nullptr)
+            {
+                session.Close();
+                framePool.Close();
+
+                errorText =
+                    "Windows Graphics Capture signaled a frame but none was available.";
+                return KS_CAPTURE_FAILED;
+            }
+
+            auto surfaceAccess =
+                frame.Surface().as<
+                    ::Windows::Graphics::DirectX::Direct3D11::
+                    IDirect3DDxgiInterfaceAccess>();
+
+            ComPtr<ID3D11Texture2D> texture;
+            hr = surfaceAccess->GetInterface(
+                __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void**>(
+                    texture.GetAddressOf()));
+
+            if (FAILED(hr))
+            {
+                frame.Close();
+                session.Close();
+                framePool.Close();
+
+                errorText =
+                    "Windows Graphics Capture surface unwrap failed: " +
+                    HResultText(hr);
+                return KS_CAPTURE_FAILED;
+            }
+
+            std::string textureError;
+            const int result =
+                TextureToBmp(
+                    d3dDevice.Get(),
+                    d3dContext.Get(),
+                    texture.Get(),
+                    bmpBytes,
+                    textureError);
+
+            frame.Close();
+            session.Close();
+            framePool.Close();
+
+            if (result != KS_OK)
+                errorText = textureError;
+
+            return result;
+        }
+        catch (const winrt::hresult_error& error)
+        {
+            errorText =
+                "Windows Graphics Capture failed: " +
+                HResultText(
+                    static_cast<HRESULT>(error.code()));
+            return KS_CAPTURE_FAILED;
+        }
+        catch (...)
+        {
+            errorText =
+                "Windows Graphics Capture failed with an unexpected exception.";
+            return KS_CAPTURE_FAILED;
+        }
+    }
+
     int BuildBmpBytes(
         uint32_t deviceIndex,
         std::vector<uint8_t>& bmpBytes)
@@ -511,7 +947,9 @@ namespace
         UINT enumeratedOutputCount = 0;
         UINT attachedOutputCount = 0;
         HRESULT lastDuplicateHr = S_OK;
+        HRESULT lastDuplicate1Hr = S_OK;
         std::string lastDuplicateOutputName;
+        std::string lastFallbackError;
 
         for (UINT outputIndex = 0;; ++outputIndex)
         {
@@ -533,43 +971,113 @@ namespace
                 continue;
 
             ++attachedOutputCount;
-
-            ComPtr<IDXGIOutput1> output1;
-            if (FAILED(output.As(&output1)))
-                continue;
+            lastDuplicateOutputName =
+                WideToUtf8(desc.DeviceName);
 
             ComPtr<IDXGIOutputDuplication> candidate;
-            hr = output1->DuplicateOutput(device.Get(), candidate.GetAddressOf());
-            if (FAILED(hr))
+
+            ComPtr<IDXGIOutput5> output5;
+            if (SUCCEEDED(output.As(&output5)))
             {
-                lastDuplicateHr = hr;
-                lastDuplicateOutputName = WideToUtf8(desc.DeviceName);
-                continue;
+                const DXGI_FORMAT supportedFormats[] =
+                {
+                    DXGI_FORMAT_B8G8R8A8_UNORM
+                };
+
+                lastDuplicate1Hr =
+                    output5->DuplicateOutput1(
+                        device.Get(),
+                        0,
+                        static_cast<UINT>(
+                            ARRAYSIZE(supportedFormats)),
+                        supportedFormats,
+                        candidate.GetAddressOf());
+
+                if (SUCCEEDED(lastDuplicate1Hr))
+                {
+                    duplication = candidate;
+                    break;
+                }
             }
 
-            duplication = candidate;
-            break;
+            ComPtr<IDXGIOutput1> output1;
+            if (SUCCEEDED(output.As(&output1)))
+            {
+                candidate.Reset();
+
+                lastDuplicateHr =
+                    output1->DuplicateOutput(
+                        device.Get(),
+                        candidate.GetAddressOf());
+
+                if (SUCCEEDED(lastDuplicateHr))
+                {
+                    duplication = candidate;
+                    break;
+                }
+            }
+
+            // Desktop Duplication can return DXGI_ERROR_UNSUPPORTED on
+            // hybrid systems even though DXGI reports an attached output.
+            // Keep DDA as the primary backend, but fall back to the WinRT
+            // monitor capture interop for that exact HMONITOR.
+            std::vector<uint8_t> fallbackBmp;
+            std::string fallbackError;
+            const int fallbackStatus =
+                CaptureMonitorWithWindowsGraphicsCapture(
+                    desc.Monitor,
+                    fallbackBmp,
+                    fallbackError);
+
+            if (fallbackStatus == KS_OK)
+            {
+                bmpBytes = std::move(fallbackBmp);
+                return KS_OK;
+            }
+
+            lastFallbackError = fallbackError;
         }
 
         if (duplication == nullptr)
         {
             std::ostringstream error;
             error
-                << "No attached desktop output on the selected adapter could be duplicated."
+                << "No attached desktop output on the selected adapter could be captured."
                 << " deviceIndex=" << deviceIndex
                 << ", adapter=\"" << selectedDevice.Name << "\""
                 << ", enumeratedOutputs=" << enumeratedOutputCount
                 << ", attachedOutputs=" << attachedOutputCount;
 
+            if (!lastDuplicateOutputName.empty())
+            {
+                error
+                    << ", lastOutput=\"" << lastDuplicateOutputName << "\"";
+            }
+
+            if (FAILED(lastDuplicate1Hr))
+            {
+                error
+                    << ", DuplicateOutput1="
+                    << HResultText(lastDuplicate1Hr);
+            }
+
             if (FAILED(lastDuplicateHr))
             {
                 error
-                    << ", lastDuplicateOutput=\"" << lastDuplicateOutputName << "\""
-                    << ", DuplicateOutput=" << HResultText(lastDuplicateHr);
+                    << ", DuplicateOutput="
+                    << HResultText(lastDuplicateHr);
+            }
+
+            if (!lastFallbackError.empty())
+            {
+                error
+                    << ", WindowsGraphicsCapture=\""
+                    << lastFallbackError
+                    << "\"";
             }
 
             error
-                << ". Run -list again after display topology changes.";
+                << ".";
 
             SetError(error.str());
             return KS_CAPTURE_FAILED;
@@ -633,120 +1141,19 @@ namespace
             return KS_CAPTURE_FAILED;
         }
 
-        D3D11_TEXTURE2D_DESC textureDesc = {};
-        desktopTexture->GetDesc(&textureDesc);
+        std::string textureError;
+        const int textureStatus =
+            TextureToBmp(
+                device.Get(),
+                context.Get(),
+                desktopTexture.Get(),
+                bmpBytes,
+                textureError);
 
-        if (textureDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM)
-        {
-            SetError("Unexpected desktop duplication pixel format.");
-            return KS_CAPTURE_FAILED;
-        }
+        if (textureStatus != KS_OK)
+            SetError(textureError);
 
-        D3D11_TEXTURE2D_DESC stagingDesc = textureDesc;
-        stagingDesc.Usage = D3D11_USAGE_STAGING;
-        stagingDesc.BindFlags = 0;
-        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        stagingDesc.MiscFlags = 0;
-
-        ComPtr<ID3D11Texture2D> stagingTexture;
-        hr = device->CreateTexture2D(
-            &stagingDesc,
-            nullptr,
-            stagingTexture.GetAddressOf());
-
-        if (FAILED(hr))
-        {
-            SetError("CreateTexture2D(staging) failed: " + HResultText(hr));
-            return KS_CAPTURE_FAILED;
-        }
-
-        context->CopyResource(stagingTexture.Get(), desktopTexture.Get());
-
-        D3D11_MAPPED_SUBRESOURCE mapped = {};
-        hr = context->Map(
-            stagingTexture.Get(),
-            0,
-            D3D11_MAP_READ,
-            0,
-            &mapped);
-
-        if (FAILED(hr))
-        {
-            SetError("Map(staging) failed: " + HResultText(hr));
-            return KS_CAPTURE_FAILED;
-        }
-
-        const uint64_t tightStride64 =
-            static_cast<uint64_t>(textureDesc.Width) * 4ull;
-        const uint64_t imageBytes64 =
-            tightStride64 * static_cast<uint64_t>(textureDesc.Height);
-        const uint64_t fileBytes64 =
-            sizeof(BITMAPFILEHEADER) +
-            sizeof(BITMAPINFOHEADER) +
-            imageBytes64;
-
-        if (tightStride64 > UINT32_MAX ||
-            imageBytes64 > UINT32_MAX ||
-            fileBytes64 > UINT32_MAX)
-        {
-            context->Unmap(stagingTexture.Get(), 0);
-            SetError("Captured image is too large for the current BMP API.");
-            return KS_CAPTURE_FAILED;
-        }
-
-        const uint32_t tightStride = static_cast<uint32_t>(tightStride64);
-        const uint32_t imageBytes = static_cast<uint32_t>(imageBytes64);
-        const uint32_t fileBytes = static_cast<uint32_t>(fileBytes64);
-
-        bmpBytes.assign(fileBytes, 0);
-
-        BITMAPFILEHEADER fileHeader = {};
-        fileHeader.bfType = 0x4D42;
-        fileHeader.bfOffBits =
-            sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-        fileHeader.bfSize = fileBytes;
-
-        BITMAPINFOHEADER infoHeader = {};
-        infoHeader.biSize = sizeof(infoHeader);
-        infoHeader.biWidth = static_cast<LONG>(textureDesc.Width);
-        infoHeader.biHeight = static_cast<LONG>(textureDesc.Height);
-        infoHeader.biPlanes = 1;
-        infoHeader.biBitCount = 32;
-        infoHeader.biCompression = BI_RGB;
-        infoHeader.biSizeImage = imageBytes;
-
-        std::memcpy(
-            bmpBytes.data(),
-            &fileHeader,
-            sizeof(fileHeader));
-
-        std::memcpy(
-            bmpBytes.data() + sizeof(fileHeader),
-            &infoHeader,
-            sizeof(infoHeader));
-
-        uint8_t* destination =
-            bmpBytes.data() +
-            sizeof(BITMAPFILEHEADER) +
-            sizeof(BITMAPINFOHEADER);
-
-        const uint8_t* source =
-            static_cast<const uint8_t*>(mapped.pData);
-
-        for (UINT y = 0; y < textureDesc.Height; ++y)
-        {
-            const UINT sourceY = textureDesc.Height - 1 - y;
-
-            std::memcpy(
-                destination +
-                    static_cast<size_t>(y) * tightStride,
-                source +
-                    static_cast<size_t>(sourceY) * mapped.RowPitch,
-                tightStride);
-        }
-
-        context->Unmap(stagingTexture.Get(), 0);
-        return KS_OK;
+        return textureStatus;
     }
 
     int CopyTextResult(
