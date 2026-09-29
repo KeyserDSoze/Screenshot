@@ -8,6 +8,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KernelScreenshot.App", "App
 EndProject
 Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "D3DKMTProbe", "Native\D3DKMTProbe\D3DKMTProbe.vcxproj", "{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}"
 EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "KernelScreenshotApi", "Native\KernelScreenshotApi\KernelScreenshotApi.vcxproj", "{B0D6AF8C-A5B6-44BE-A2C4-51A02AB3D4AB}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "KernelScreenshotCli", "Native\KernelScreenshotCli\KernelScreenshotCli.vcxproj", "{F2FDF3B0-8AA0-4636-9904-E0F8407107EA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -22,6 +26,14 @@ Global
 		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Debug|x64.Build.0 = Debug|x64
 		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Release|x64.ActiveCfg = Release|x64
 		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Release|x64.Build.0 = Release|x64
+		{B0D6AF8C-A5B6-44BE-A2C4-51A02AB3D4AB}.Debug|x64.ActiveCfg = Debug|x64
+		{B0D6AF8C-A5B6-44BE-A2C4-51A02AB3D4AB}.Debug|x64.Build.0 = Debug|x64
+		{B0D6AF8C-A5B6-44BE-A2C4-51A02AB3D4AB}.Release|x64.ActiveCfg = Release|x64
+		{B0D6AF8C-A5B6-44BE-A2C4-51A02AB3D4AB}.Release|x64.Build.0 = Release|x64
+		{F2FDF3B0-8AA0-4636-9904-E0F8407107EA}.Debug|x64.ActiveCfg = Debug|x64
+		{F2FDF3B0-8AA0-4636-9904-E0F8407107EA}.Debug|x64.Build.0 = Debug|x64
+		{F2FDF3B0-8AA0-4636-9904-E0F8407107EA}.Release|x64.ActiveCfg = Release|x64
+		{F2FDF3B0-8AA0-4636-9904-E0F8407107EA}.Release|x64.Build.0 = Release|x64
 		{5A2C5CC4-4176-4D77-82E8-B66842A56B70}.Debug|x64.ActiveCfg = Debug|Any CPU
 		{5A2C5CC4-4176-4D77-82E8-B66842A56B70}.Debug|x64.Build.0 = Debug|Any CPU
 		{5A2C5CC4-4176-4D77-82E8-B66842A56B70}.Release|x64.ActiveCfg = Release|Any CPU
