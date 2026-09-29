@@ -114,26 +114,55 @@ status = KS_CaptureBmp(1, bmp, &bytes);
 // bmp[0..bytes-1] is a complete BMP file.
 ```
 
-## CLI wrapper
+## DLL location for third-party applications
 
-A DLL is not a command-line executable, so the shell syntax is provided by `KernelScreenshotCli.exe`, which calls the DLL.
+The DLL file is:
 
-List devices:
-
-```bat
-KernelScreenshotCli.exe -list
+```text
+KernelScreenshot.dll
 ```
 
-Write screenshot bytes directly to stdout:
+Repository build outputs are placed in:
 
-```bat
-KernelScreenshotCli.exe -device 0 -screenshot > shot.bmp
+```text
+Native\bin\x64\Debug\
 ```
 
-Or write a file explicitly:
+or:
 
-```bat
-KernelScreenshotCli.exe -device 0 -screenshot -out shot.bmp
+```text
+Native\bin\x64\Release\
 ```
 
-For screenshot mode, stdout contains only BMP bytes unless `-out` is used. Diagnostics and errors go to stderr.
+A third-party application should not hard-code a developer-specific absolute path.
+
+The simplest deployment layout is:
+
+```text
+ThirdPartyApp.exe
+KernelScreenshot.dll
+```
+
+with the DLL next to the third-party executable.
+
+Consumers should reference the library by filename, for example:
+
+```csharp
+[DllImport("KernelScreenshot.dll", CallingConvention = CallingConvention.Cdecl)]
+```
+
+The host process must be x64.
+
+## Command-line alternative
+
+For applications that prefer to launch an executable instead of loading the DLL directly, use:
+
+```text
+KernelScreenshotCli.exe
+```
+
+See:
+
+```text
+docs/EXE_API.md
+```
