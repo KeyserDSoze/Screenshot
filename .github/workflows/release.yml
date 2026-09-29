@@ -65,7 +65,7 @@ jobs:
           path: ${{ env.PACKAGE_ZIP }}
           if-no-files-found: error
 
-      - name: Publish GitHub Release asset
+      - name: Publish versioned GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
@@ -82,4 +82,24 @@ jobs:
           }
           else {
             gh release create $tag $asset --repo $repo --title "KernelScreenshot $tag" --generate-notes
+          }
+
+      - name: Publish latest GitHub Release from main
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "latest"
+          $repo = "${{ github.repository }}"
+          $asset = $env:PACKAGE_ZIP
+          $sha = "${{ github.sha }}"
+
+          gh release view $tag --repo $repo 2>$null
+
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --repo $repo --clobber
+          }
+          else {
+            gh release create $tag $asset --repo $repo --target $sha --title "KernelScreenshot latest" --prerelease --notes "Latest successful x64 build from main."
           }
