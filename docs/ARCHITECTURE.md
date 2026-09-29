@@ -35,11 +35,63 @@ It then closes every D3DKMT adapter handle with `D3DKMTCloseAdapter`.
 
 The C# side parses the helper's JSON output and lets the user select an adapter by index/LUID. The LUID is the identity we can carry into the next capture/readback stage.
 
+## Selected-adapter pixel readback
+
+After the C# frontend selects a D3DKMT adapter, it passes the adapter LUID back to the native helper.
+
+The helper then follows this path:
+
+```text
+selected D3DKMT LUID
+    |
+    v
+CreateDXGIFactory1
+    |
+    v
+IDXGIFactory1::EnumAdapters1
+    |
+    | match DXGI_ADAPTER_DESC1::AdapterLuid
+    v
+IDXGIAdapter1
+    |
+    v
+D3D11CreateDevice
+    |
+    v
+IDXGIAdapter::EnumOutputs
+    |
+    v
+IDXGIOutput1::DuplicateOutput
+    |
+    v
+IDXGIOutputDuplication::AcquireNextFrame
+    |
+    v
+ID3D11Texture2D (desktop image)
+    |
+    | CopyResource
+    v
+D3D11_USAGE_STAGING texture
+    |
+    | ID3D11DeviceContext::Map
+    v
+CPU-readable BGRA bytes
+    |
+    v
+BMP file
+```
+
+This is a real pixel readback path on the active Intel/NVIDIA WDDM stack. The vendor display miniport remains installed and active.
+
+The current implementation captures the first attached desktop output on the selected adapter and writes a single BMP. It does not yet apply output rotation to the saved image, merge multiple outputs, or continuously capture frames.
+
 ## What this proves
 
-This route reaches the Windows graphics kernel and the currently active Intel/NVIDIA stack without installing a replacement display miniport.
+The D3DKMT phase proves which real WDDM adapter we selected and gives us its stable LUID.
 
-It does **not** yet provide a documented API for reading the final physical HDMI/eDP scan-out pixel by pixel. That remains the next research step.
+The DXGI/D3D11 phase then binds to that exact adapter and copies one desktop frame from a GPU resource into CPU-readable memory without replacing the Intel/NVIDIA miniport.
+
+This still is not a raw read of a universal physical "final cable framebuffer". Desktop Duplication is a WDDM/DXGI capture interface that exposes a desktop image resource managed by Windows and the active graphics stack.
 
 ## Legacy KMDOD experiment
 
