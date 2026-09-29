@@ -84,6 +84,12 @@ jobs:
           $version = $env:RELEASE_VERSION
           $run = "${{ github.run_number }}"
 
+          $mainSha = ((git ls-remote origin refs/heads/main) -split "\t")[0]
+          if ($sha -ne $mainSha) {
+            Write-Host "A newer main commit exists ($mainSha). Keeping its release as latest."
+            exit 0
+          }
+
           gh release view $tag --repo $repo 2>$null
 
           if ($LASTEXITCODE -eq 0) {
