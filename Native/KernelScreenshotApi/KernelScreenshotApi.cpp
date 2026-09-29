@@ -19,6 +19,9 @@ using Microsoft::WRL::ComPtr;
 namespace
 {
     thread_local std::string g_LastError;
+    thread_local std::vector<uint8_t> g_PendingBmp;
+    thread_local uint32_t g_PendingBmpDeviceIndex = 0;
+    thread_local bool g_HasPendingBmp = false;
 
     void SetError(const std::string& value)
     {
@@ -800,6 +803,60 @@ KS_API int KS_CALL KS_CaptureBmp(
         return KS_INVALID_ARGUMENT;
     }
 
+    // The public API uses the standard two-call buffer pattern:
+    //
+    //   1. buffer == nullptr -> return the required byte count.
+    //   2. caller allocates that buffer and calls again.
+    //
+    // Capturing on both calls would require two independent Desktop
+    // Duplication frames. On a static desktop the second AcquireNextFrame
+    // can wait for another present, making CLI callers appear to hang.
+    // Capture exactly once on the size-query call and keep those bytes for
+    // the immediately following copy call on the same thread/device.
+    if (buffer == nullptr)
+    {
+        g_PendingBmp.clear();
+        g_HasPendingBmp = false;
+
+        const int status =
+            BuildBmpBytes(deviceIndex, g_PendingBmp);
+
+        if (status != KS_OK)
+            return status;
+
+        if (g_PendingBmp.size() > UINT32_MAX)
+        {
+            g_PendingBmp.clear();
+            SetError("Captured BMP is too large.");
+            return KS_CAPTURE_FAILED;
+        }
+
+        g_PendingBmpDeviceIndex = deviceIndex;
+        g_HasPendingBmp = true;
+        *bufferBytes = static_cast<uint32_t>(g_PendingBmp.size());
+        return KS_OK;
+    }
+
+    if (g_HasPendingBmp &&
+        g_PendingBmpDeviceIndex == deviceIndex)
+    {
+        const int status =
+            CopyBinaryResult(
+                g_PendingBmp,
+                buffer,
+                bufferBytes);
+
+        if (status == KS_OK)
+        {
+            g_PendingBmp.clear();
+            g_HasPendingBmp = false;
+        }
+
+        return status;
+    }
+
+    // Also support callers that provide a destination buffer on the first
+    // call. In that case capture one frame and copy it immediately.
     std::vector<uint8_t> bmpBytes;
     const int status =
         BuildBmpBytes(deviceIndex, bmpBytes);
