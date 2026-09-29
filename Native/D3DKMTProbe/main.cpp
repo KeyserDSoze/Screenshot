@@ -44,8 +44,8 @@ namespace
         if (required <= 1)
             return {};
 
-        std::string result(static_cast<size_t>(required - 1), '\0');
-        WideCharToMultiByte(
+        std::string result(static_cast<size_t>(required), '\0');
+        const int written = WideCharToMultiByte(
             CP_UTF8,
             WC_ERR_INVALID_CHARS,
             value,
@@ -55,6 +55,10 @@ namespace
             nullptr,
             nullptr);
 
+        if (written <= 1)
+            return {};
+
+        result.resize(static_cast<size_t>(written - 1));
         return result;
     }
 
