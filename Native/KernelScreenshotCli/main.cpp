@@ -48,17 +48,16 @@ namespace
         return 0;
     }
 
-    int CaptureBmp(uint32_t deviceIndex, const std::string& outputPath)
+    int CaptureBmpBytes(
+        uint32_t deviceIndex,
+        std::vector<uint8_t>& bmp)
     {
         uint32_t bytes = 0;
         int status = KS_CaptureBmp(deviceIndex, nullptr, &bytes);
         if (status != KS_OK)
-        {
-            std::cerr << GetLastErrorText() << "\n";
             return status;
-        }
 
-        std::vector<uint8_t> bmp(bytes);
+        bmp.assign(bytes, 0);
 
         for (int attempt = 0; attempt < 2; ++attempt)
         {
@@ -72,18 +71,19 @@ namespace
             }
 
             if (status != KS_OK)
-            {
-                std::cerr << GetLastErrorText() << "\n";
                 return status;
-            }
 
             bmp.resize(capacity);
-            break;
+            return KS_OK;
         }
 
-        if (status != KS_OK)
-            return status;
+        return status;
+    }
 
+    int WriteBmp(
+        const std::vector<uint8_t>& bmp,
+        const std::string& outputPath)
+    {
         if (!outputPath.empty())
         {
             std::ofstream file(outputPath, std::ios::binary);
@@ -122,13 +122,69 @@ namespace
         return 0;
     }
 
+    int CaptureBmp(
+        uint32_t deviceIndex,
+        const std::string& outputPath)
+    {
+        std::vector<uint8_t> bmp;
+        const int status = CaptureBmpBytes(deviceIndex, bmp);
+
+        if (status != KS_OK)
+        {
+            std::cerr << GetLastErrorText() << "\n";
+            return status;
+        }
+
+        return WriteBmp(bmp, outputPath);
+    }
+
+    int CaptureBmpAuto(const std::string& outputPath)
+    {
+        std::vector<std::string> failures;
+
+        for (uint32_t deviceIndex = 0; deviceIndex < 64; ++deviceIndex)
+        {
+            std::vector<uint8_t> bmp;
+            const int status = CaptureBmpBytes(deviceIndex, bmp);
+
+            if (status == KS_DEVICE_NOT_FOUND)
+                break;
+
+            if (status == KS_OK)
+                return WriteBmp(bmp, outputPath);
+
+            const std::string error = GetLastErrorText();
+
+            failures.push_back(
+                "device " +
+                std::to_string(deviceIndex) +
+                ": " +
+                error);
+
+            if (status == KS_ENUMERATION_FAILED ||
+                status == KS_INVALID_ARGUMENT)
+            {
+                break;
+            }
+        }
+
+        std::cerr
+            << "Auto capture could not find a capture-capable desktop adapter.";
+
+        for (const std::string& failure : failures)
+            std::cerr << "\n  " << failure;
+
+        std::cerr << "\n";
+        return KS_CAPTURE_FAILED;
+    }
+
     void PrintUsage()
     {
         std::cerr
             << "Usage:\n"
             << "  KernelScreenshotCli.exe -list\n"
-            << "  KernelScreenshotCli.exe -device <index> -screenshot\n"
-            << "  KernelScreenshotCli.exe -device <index> -screenshot -out <file.bmp>\n";
+            << "  KernelScreenshotCli.exe -device <index|auto> -screenshot\n"
+            << "  KernelScreenshotCli.exe -device <index|auto> -screenshot -out <file.bmp>\n";
     }
 }
 
@@ -141,15 +197,6 @@ int main(int argc, char** argv)
         std::string(argv[1]) == "-device" &&
         std::string(argv[3]) == "-screenshot")
     {
-        char* end = nullptr;
-        const unsigned long parsed = std::strtoul(argv[2], &end, 10);
-
-        if (end == argv[2] || *end != '\0' || parsed > UINT32_MAX)
-        {
-            std::cerr << "Invalid device index.\n";
-            return 2;
-        }
-
         std::string outputPath;
 
         if (argc == 6 && std::string(argv[4]) == "-out")
@@ -157,6 +204,23 @@ int main(int argc, char** argv)
         else if (argc != 4)
         {
             PrintUsage();
+            return 2;
+        }
+
+        const std::string deviceArgument = argv[2];
+
+        if (deviceArgument == "auto")
+            return CaptureBmpAuto(outputPath);
+
+        char* end = nullptr;
+        const unsigned long parsed =
+            std::strtoul(deviceArgument.c_str(), &end, 10);
+
+        if (end == deviceArgument.c_str() ||
+            *end != '\0' ||
+            parsed > UINT32_MAX)
+        {
+            std::cerr << "Invalid device index. Use an integer or 'auto'.\n";
             return 2;
         }
 
