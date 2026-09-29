@@ -123,6 +123,40 @@ Example shape:
 
 The top-level `index` identifies the device that can be passed to `-device`.
 
+Each device also reports:
+
+```json
+"outputCount": 1,
+"attachedOutputCount": 0,
+"hasAttachedDesktopOutput": false
+```
+
+`outputCount` is the number of DXGI outputs enumerated on that adapter.
+
+`attachedOutputCount` counts only outputs currently attached to the Windows desktop.
+
+`hasAttachedDesktopOutput` is the simplest field for third-party code deciding whether an explicitly selected adapter is a reasonable screenshot candidate.
+
+A graphics adapter can remain present in `-list` even when it currently has no attached desktop output. This is common on hybrid laptops when an external display is disconnected.
+
+## Automatic adapter fallback
+
+For third-party applications that do not need to force a specific GPU, use:
+
+```bat
+KernelScreenshotCli.exe -device auto -screenshot
+```
+
+The CLI tries the currently enumerated adapters in order and returns the first screenshot that succeeds. This is useful when display topology changes, for example when an HDMI monitor is connected or disconnected.
+
+The file-output variant is:
+
+```bat
+KernelScreenshotCli.exe -device auto -screenshot -out screenshot.bmp
+```
+
+For multi-monitor applications that need a specific physical desktop region, explicit adapter/output selection is preferable to `auto`. The current CLI still captures the first attached duplicable output on the chosen adapter.
+
 ## Capture screenshot to stdout
 
 Command:
@@ -246,12 +280,12 @@ The caller should check the process exit code before treating the file as valid.
         v
    parse JSON
 
-2. choose device index
+2. choose an adapter with hasAttachedDesktopOutput=true
+   or use -device auto
         |
         v
-   device = 0 or 1 ...
 
-3. KernelScreenshotCli.exe -device <index> -screenshot
+3. KernelScreenshotCli.exe -device <index|auto> -screenshot
         |
         v
    read BMP bytes from stdout
