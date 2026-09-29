@@ -438,9 +438,16 @@ namespace
 
         DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
         ComPtr<IDXGIResource> desktopResource;
+        bool acquiredDesktopPresent = false;
 
-        for (int attempt = 0; attempt < 5; ++attempt)
+        // AcquireNextFrame can wake for a pointer-only update. In that case
+        // LastPresentTime and AccumulatedFrames are both zero; that resource
+        // must not be treated as a fresh desktop image.
+        for (int attempt = 0; attempt < 10; ++attempt)
         {
+            frameInfo = {};
+            desktopResource.Reset();
+
             hr = duplication->AcquireNextFrame(
                 1000,
                 &frameInfo,
@@ -449,12 +456,33 @@ namespace
             if (hr == DXGI_ERROR_WAIT_TIMEOUT)
                 continue;
 
-            break;
+            if (FAILED(hr))
+                break;
+
+            const bool hasDesktopPresent =
+                frameInfo.LastPresentTime.QuadPart != 0 ||
+                frameInfo.AccumulatedFrames != 0;
+
+            if (hasDesktopPresent)
+            {
+                acquiredDesktopPresent = true;
+                break;
+            }
+
+            duplication->ReleaseFrame();
         }
 
         if (FAILED(hr))
         {
             std::cerr << "AcquireNextFrame failed: " << HResultText(hr) << "\n";
+            return 26;
+        }
+
+        if (!acquiredDesktopPresent)
+        {
+            std::cerr
+                << "AcquireNextFrame returned no desktop-present frame "
+                << "(only timeouts or pointer-only updates).\n";
             return 26;
         }
 
@@ -501,6 +529,27 @@ namespace
             return 30;
         }
 
+        ULONGLONG nonBlackPixels = 0;
+        ULONGLONG channelSum = 0;
+
+        const BYTE* pixelBase = static_cast<const BYTE*>(mapped.pData);
+        for (UINT y = 0; y < textureDesc.Height; ++y)
+        {
+            const BYTE* row = pixelBase + static_cast<SIZE_T>(y) * mapped.RowPitch;
+            for (UINT x = 0; x < textureDesc.Width; ++x)
+            {
+                const BYTE* pixel = row + static_cast<SIZE_T>(x) * 4;
+                const BYTE b = pixel[0];
+                const BYTE g = pixel[1];
+                const BYTE r = pixel[2];
+
+                if (r != 0 || g != 0 || b != 0)
+                    ++nonBlackPixels;
+
+                channelSum += static_cast<ULONGLONG>(r) + g + b;
+            }
+        }
+
         const bool saved = SaveBgra32Bmp(
             outputPath,
             textureDesc.Width,
@@ -529,6 +578,11 @@ namespace
             << ",\"height\":" << textureDesc.Height
             << ",\"rotation\":" << static_cast<unsigned int>(duplicationDesc.Rotation)
             << ",\"featureLevel\":" << static_cast<unsigned int>(featureLevel)
+            << ",\"accumulatedFrames\":" << frameInfo.AccumulatedFrames
+            << ",\"lastPresentTime\":" << frameInfo.LastPresentTime.QuadPart
+            << ",\"protectedContentMaskedOut\":" << (frameInfo.ProtectedContentMaskedOut ? "true" : "false")
+            << ",\"nonBlackPixels\":" << nonBlackPixels
+            << ",\"channelSum\":" << channelSum
             << "}\n";
 
         return 0;
