@@ -149,6 +149,8 @@ KernelScreenshotCli.exe -device auto -screenshot
 
 The CLI tries the currently enumerated adapters in order and returns the first screenshot that succeeds.
 
+Before leaving Desktop Duplication on hybrid systems, the capture engine also resolves each `\\.\DISPLAYn` name through `D3DKMTOpenAdapterFromGdiDisplayName`. If the low-level VidPN/GDI owner LUID differs from the DXGI adapter that first exposed the output, it retries `DuplicateOutput1` / `DuplicateOutput` on that KMT-resolved adapter. Windows Graphics Capture remains only the final fallback after both Desktop Duplication ownership paths fail.
+
 Numeric device selection is also fault-tolerant. For example:
 
 ```bat
