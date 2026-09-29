@@ -1,6 +1,49 @@
 # Architecture
 
-## From click to framebuffer
+## Safe path used by default
+
+```text
+C# frontend
+    |
+    | starts native probe
+    v
+D3DKMTProbe.exe
+    |
+    | D3DKMTEnumAdapters2
+    | D3DKMTQueryAdapterInfo
+    v
+Gdi32.dll / Windows graphics kernel thunk
+    |
+    v
+dxgkrnl.sys
+    |
+    +---- Intel KMD
+    |
+    +---- NVIDIA KMD
+```
+
+The native helper uses documented D3DKMT calls and leaves the installed vendor drivers in place.
+
+For each returned `D3DKMT_ADAPTERINFO`, the probe currently queries:
+
+- `KMTQAITYPE_ADAPTERREGISTRYINFO`
+- `KMTQAITYPE_DRIVERVERSION`
+- `KMTQAITYPE_ADAPTERADDRESS`
+- `KMTQAITYPE_ADAPTERTYPE`
+
+It then closes every D3DKMT adapter handle with `D3DKMTCloseAdapter`.
+
+The C# side parses the helper's JSON output and lets the user select an adapter by index/LUID. The LUID is the identity we can carry into the next capture/readback stage.
+
+## What this proves
+
+This route reaches the Windows graphics kernel and the currently active Intel/NVIDIA stack without installing a replacement display miniport.
+
+It does **not** yet provide a documented API for reading the final physical HDMI/eDP scan-out pixel by pixel. That remains the next research step.
+
+## Legacy KMDOD experiment
+
+The original learning path is still present and is now explicitly opt-in:
 
 ```text
 C# WH_MOUSE_LL hook
@@ -29,9 +72,11 @@ CPU mapping of physical display framebuffer
 
 The upstream KMDOD obtains display information through `dxgkrnl`. When a mode is activated it maps `DispInfo.PhysicAddress`; the sample's `MapFrameBuffer` uses `MmMapIoSpaceEx`.
 
-## Control device
+This model is appropriate only when the target adapter exposes the simple POST/VESA/UEFI framebuffer model expected by KMDOD. It must not be treated as a generic Intel/NVIDIA scan-out reader.
 
-After `DxgkInitializeDisplayOnlyDriver`, the lab saves the graphics stack's existing CREATE/CLOSE/DEVICE_CONTROL dispatch routines and creates:
+## Legacy control device
+
+After `DxgkInitializeDisplayOnlyDriver`, the lab creates:
 
 ```text
 \Device\KernelScreenshot
@@ -39,40 +84,20 @@ After `DxgkInitializeDisplayOnlyDriver`, the lab saves the graphics stack's exis
 \\.\KernelScreenshot
 ```
 
-Our wrappers handle only the control device. Requests targeting dxgkrnl-owned display device objects are forwarded to the original routines.
+`IOCTL_SCREENSHOT_QUERY` is METHOD_BUFFERED.
 
-## IOCTLs
+`IOCTL_SCREENSHOT_CAPTURE` is METHOD_OUT_DIRECT. Windows pins the application's output pages and supplies an MDL; the driver maps it with `MmGetSystemAddressForMdlSafe` and copies from the KMDOD framebuffer.
 
-`IOCTL_SCREENSHOT_QUERY` is METHOD_BUFFERED and returns width, height, pitch, output stride, pixel format and byte count.
-
-`IOCTL_SCREENSHOT_CAPTURE` is METHOD_OUT_DIRECT. Windows pins the application's output pages and supplies an MDL; the driver maps the MDL with `MmGetSystemAddressForMdlSafe` and copies the framebuffer.
-
-The C# process never receives a kernel or physical framebuffer address.
-
-## Pixel address
-
-For the supported 32-bpp mode:
+For the supported 32-bpp legacy mode:
 
 ```text
 pixel(x,y) = FrameBuffer.Ptr + y * SourcePitch + x * 4
 ```
 
-The screenshot copies only `Width * 4` bytes per row, preserving the distinction between framebuffer pitch and tightly packed output stride.
+## Why the two paths are different
 
-## Useful WinDbg breakpoints
+KMDOD owns a deliberately simple display adapter and can map a firmware-style physical framebuffer.
 
-```text
-BddDdiStartDevice
-BASIC_DISPLAY_DRIVER::StartDevice
-BASIC_DISPLAY_DRIVER::SetSourceModeAndPath
-MapFrameBuffer
-ScreenshotDeviceControl
-BASIC_DISPLAY_DRIVER::GetScreenshotInfo
-BASIC_DISPLAY_DRIVER::CopyScreenshotFrame
-```
+A normal Intel/NVIDIA WDDM driver can use GPU virtual memory, tiled/compressed allocations, overlays, hardware cursors, color processing and vendor-specific scan-out state. Therefore there is no universal public kernel routine equivalent to `GetFinalMonitorFramebuffer()`.
 
-Inspect `DispInfo.PhysicAddress`, `DispInfo.Pitch`, `DispInfo.Width`, `DispInfo.Height` and `FrameBuffer.Ptr`.
-
-## Why this still is not the cable signal
-
-This experiment reads the simple scan-out framebuffer model exposed to KMDOD. A modern GPU can additionally have overlay/cursor planes, color transforms, HDR processing, compression and vendor-specific display engine behavior. There is no universal public Windows kernel API named "read final HDMI/DisplayPort pixel".
+The safe D3DKMT path is the right starting point for studying the real machine. The KMDOD path remains useful as a controlled experiment for understanding the older/simple framebuffer model.
