@@ -6,6 +6,8 @@ Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "KernelScreenshotDisplay", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KernelScreenshot.App", "App\KernelScreenshot.App.csproj", "{5A2C5CC4-4176-4D77-82E8-B66842A56B70}"
 EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "D3DKMTProbe", "Native\D3DKMTProbe\D3DKMTProbe.vcxproj", "{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -16,6 +18,10 @@ Global
 		{D3C62015-3845-4DA8-8522-5DC45B735063}.Debug|x64.Build.0 = Debug|x64
 		{D3C62015-3845-4DA8-8522-5DC45B735063}.Release|x64.ActiveCfg = Release|x64
 		{D3C62015-3845-4DA8-8522-5DC45B735063}.Release|x64.Build.0 = Release|x64
+		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Debug|x64.ActiveCfg = Debug|x64
+		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Debug|x64.Build.0 = Debug|x64
+		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Release|x64.ActiveCfg = Release|x64
+		{7D9BDB6B-EAD0-4BB8-BF63-A2207ED55C1F}.Release|x64.Build.0 = Release|x64
 		{5A2C5CC4-4176-4D77-82E8-B66842A56B70}.Debug|x64.ActiveCfg = Debug|Any CPU
 		{5A2C5CC4-4176-4D77-82E8-B66842A56B70}.Debug|x64.Build.0 = Debug|Any CPU
 		{5A2C5CC4-4176-4D77-82E8-B66842A56B70}.Release|x64.ActiveCfg = Release|Any CPU
