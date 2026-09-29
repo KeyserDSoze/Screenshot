@@ -105,7 +105,7 @@ Both outputs are placed under:
 Native\bin\x64\Debug\
 ```
 
-See `docs/DLL_API.md` for the ABI and buffer contract.
+Third-party integration docs are split by interface:\n\n- `docs/DLL_API.md` — direct `KernelScreenshot.dll` ABI and buffer contract.\n- `docs/EXE_API.md` — `KernelScreenshotCli.exe` commands, stdout/stderr contract, exit codes, and executable-location rules.
 
 ## Legacy KMDOD framebuffer experiment
 
