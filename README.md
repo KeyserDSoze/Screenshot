@@ -24,10 +24,7 @@ This mode does **not** install, replace, stop, or reconfigure the Intel/NVIDIA d
 From the repository root:
 
 ```bat
-"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" ^
-  Native\D3DKMTProbe\D3DKMTProbe.vcxproj ^
-  /p:Configuration=Debug ^
-  /p:Platform=x64
+msbuild Native\D3DKMTProbe\D3DKMTProbe.vcxproj /p:Configuration=Debug /p:Platform=x64
 ```
 
 Then run:
@@ -53,7 +50,22 @@ WDDM adapters (D3DKMT -> dxgkrnl -> active vendor driver)
     ...
 ```
 
-Selecting an adapter currently proves the WDDM communication path only. Pixel readback is the next stage.
+After selecting an adapter, the app now binds DXGI/D3D11 to the same LUID, duplicates the first attached desktop output, copies the GPU texture into a CPU-readable staging texture, and writes one BMP under `Screenshots\wddm-*.bmp`.
+
+```text
+selected D3DKMT LUID
+  -> matching IDXGIAdapter1
+  -> D3D11CreateDevice
+  -> IDXGIOutput1::DuplicateOutput
+  -> AcquireNextFrame
+  -> ID3D11Texture2D
+  -> staging texture
+  -> Map
+  -> BGRA pixels
+  -> BMP
+```
+
+The vendor Intel/NVIDIA miniport remains installed and active throughout this path.
 
 ## Why this direction
 
@@ -92,7 +104,8 @@ docs/ARCHITECTURE.md         architecture notes
 
 1. Enumerate and select a real WDDM adapter safely.
 2. Inspect documented adapter/driver properties through D3DKMT.
-3. Add a readback/capture path bound to the selected adapter without replacing its vendor driver.
-4. Compare that path with the legacy KMDOD physical-framebuffer experiment.
+3. Capture one frame from the selected adapter through Desktop Duplication and CPU staging readback. **Implemented.**
+4. Add output selection, repeated capture, pointer/rotation handling and timing diagnostics.
+5. Compare that path with the legacy KMDOD physical-framebuffer experiment.
 
 The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-driver-samples license is copied under `THIRD_PARTY_LICENSES`.
