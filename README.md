@@ -105,7 +105,38 @@ Both outputs are placed under:
 Native\bin\x64\Debug\
 ```
 
-Third-party integration docs are split by interface:\n\n- `docs/DLL_API.md` — direct `KernelScreenshot.dll` ABI and buffer contract.\n- `docs/EXE_API.md` — `KernelScreenshotCli.exe` commands, stdout/stderr contract, exit codes, and executable-location rules.
+Third-party integration docs are:
+
+- `docs/THIRD_PARTY_QUICKSTART.md` — start here for C# and other third-party integrations.
+- `docs/DLL_API.md` — direct `KernelScreenshot.dll` ABI and buffer contract.
+- `docs/EXE_API.md` — `KernelScreenshotCli.exe` commands, stdout/stderr contract, exit codes, and executable-location rules.
+
+## Downloadable release
+
+The repository includes:
+
+```text
+.github/workflows/release.yml
+```
+
+The workflow builds the x64 Release version of `KernelScreenshotCli.exe` and `KernelScreenshot.dll`, packages the public header and third-party documentation, and uploads a ZIP artifact.
+
+It can be started manually from GitHub Actions.
+
+Pushing a tag beginning with `v` also creates or updates a GitHub Release and attaches the ZIP:
+
+```bat
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The resulting package is named like:
+
+```text
+KernelScreenshot-win-x64-v0.1.0.zip
+```
+
+The package is designed so a third-party C# project can copy `KernelScreenshotCli.exe` and `KernelScreenshot.dll` next to its own executable and invoke the CLI by filename.
 
 ## Legacy KMDOD framebuffer experiment
 
@@ -130,8 +161,13 @@ Do not force the KMDOD sample onto a normal Intel/NVIDIA production adapter. A d
 ```text
 App/                         C# frontend
 Native/D3DKMTProbe/          safe native D3DKMT adapter probe
+Native/KernelScreenshotApi/  reusable DLL
+Native/KernelScreenshotCli/  third-party CLI wrapper
 Driver/KMDOD/                legacy experimental display-only miniport
 docs/ARCHITECTURE.md         architecture notes
+docs/THIRD_PARTY_QUICKSTART.md
+docs/EXE_API.md
+docs/DLL_API.md
 ```
 
 ## Current objective
