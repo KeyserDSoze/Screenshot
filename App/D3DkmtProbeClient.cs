@@ -91,6 +91,10 @@ internal static class D3DkmtProbeClient
             Console.WriteLine($"Captured: {capture.Width}x{capture.Height}");
             Console.WriteLine($"DXGI output: {capture.Output}");
             Console.WriteLine($"File: {capture.Path}");
+            Console.WriteLine(
+                $"Frame diagnostics: accumulated={capture.AccumulatedFrames}, " +
+                $"lastPresent={capture.LastPresentTime}, protectedMasked={capture.ProtectedContentMaskedOut}, " +
+                $"nonBlackPixels={capture.NonBlackPixels}, channelSum={capture.ChannelSum}");
             Console.WriteLine();
             Console.WriteLine(
                 "Pixel path: selected D3DKMT LUID -> matching IDXGIAdapter -> D3D11 device -> " +
@@ -273,4 +277,9 @@ internal sealed class CaptureResult
     public uint Height { get; set; }
     public uint Rotation { get; set; }
     public uint FeatureLevel { get; set; }
+    public uint AccumulatedFrames { get; set; }
+    public long LastPresentTime { get; set; }
+    public bool ProtectedContentMaskedOut { get; set; }
+    public ulong NonBlackPixels { get; set; }
+    public ulong ChannelSum { get; set; }
 }
