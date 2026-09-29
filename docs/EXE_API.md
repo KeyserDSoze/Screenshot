@@ -147,7 +147,17 @@ For third-party applications that do not need to force a specific GPU, use:
 KernelScreenshotCli.exe -device auto -screenshot
 ```
 
-The CLI tries the currently enumerated adapters in order and returns the first screenshot that succeeds. This is useful when display topology changes, for example when an HDMI monitor is connected or disconnected.
+The CLI tries the currently enumerated adapters in order and returns the first screenshot that succeeds.
+
+Numeric device selection is also fault-tolerant. For example:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot
+```
+
+means "prefer device 0". The CLI tries device 0 first; if capture fails because that adapter no longer owns a usable desktop output, it automatically tries the other enumerated adapters before returning an error.
+
+This is useful when display topology changes, for example when an HDMI monitor is connected or disconnected.
 
 The file-output variant is:
 
