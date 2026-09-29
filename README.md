@@ -87,7 +87,7 @@ KS_GetLastErrorMessage
 
 `KS_ListDevicesJson` returns UTF-8 JSON describing the WDDM adapters and their outputs, including how many outputs are currently attached to the Windows desktop. `KS_CaptureBmp(deviceIndex, ...)` returns the screenshot as an in-memory BMP byte array.
 
-The CLI also supports `-device auto`, which falls back across adapters when display topology changes, such as HDMI connect/disconnect on a hybrid laptop.
+The CLI also supports `-device auto`, and numeric `-device N` is treated as a preferred adapter with automatic fallback to the other adapters if the preferred one cannot capture. This makes HDMI connect/disconnect changes on hybrid laptops much more robust.
 
 Because a DLL is not a command-line executable, `KernelScreenshotCli.exe` provides the shell equivalent:
 
