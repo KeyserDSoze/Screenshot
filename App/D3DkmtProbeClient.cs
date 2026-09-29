@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 
 internal static class D3DkmtProbeClient
@@ -11,7 +12,7 @@ internal static class D3DkmtProbeClient
             Console.Error.WriteLine("D3DKMTProbe.exe was not found.");
             Console.Error.WriteLine("Build it first with:");
             Console.Error.WriteLine(
-                @"  ""C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"" Native\D3DKMTProbe\D3DKMTProbe.vcxproj /p:Configuration=Debug /p:Platform=x64");
+                @"  msbuild Native\D3DKMTProbe\D3DKMTProbe.vcxproj /p:Configuration=Debug /p:Platform=x64");
             return 10;
         }
 
@@ -80,28 +81,99 @@ internal static class D3DkmtProbeClient
         Console.WriteLine($"Selected: {selected.Name}");
         Console.WriteLine($"LUID: {FormatLuid(selected)}");
         Console.WriteLine(
-            "This is the safe WDDM path: the Intel/NVIDIA driver stays installed; " +
-            "the helper talks to dxgkrnl through documented D3DKMT calls.");
-        Console.WriteLine(
-            "Pixel readback is intentionally not enabled yet. The next step is to bind a capture/readback path " +
-            "to this selected adapter without replacing its display miniport.");
+            "The vendor display driver stays installed. The native helper now binds DXGI/D3D11 " +
+            "to this exact adapter LUID and captures one desktop frame.");
+        Console.WriteLine();
+
+        try
+        {
+            CaptureResult capture = CaptureSelected(probePath, selected);
+            Console.WriteLine($"Captured: {capture.Width}x{capture.Height}");
+            Console.WriteLine($"DXGI output: {capture.Output}");
+            Console.WriteLine($"File: {capture.Path}");
+            Console.WriteLine();
+            Console.WriteLine(
+                "Pixel path: selected D3DKMT LUID -> matching IDXGIAdapter -> D3D11 device -> " +
+                "IDXGIOutputDuplication -> staging texture -> CPU-readable BGRA pixels.");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Capture failed: {ex.Message}");
+            return 14;
+        }
 
         return 0;
     }
 
     private static IReadOnlyList<WddmAdapter> RunProbe(string probePath)
     {
-        using Process process = new()
+        ProcessResult result = RunNative(probePath, []);
+        if (result.ExitCode != 0)
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = probePath,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            }
+            string detail = string.IsNullOrWhiteSpace(result.StandardError)
+                ? $"exit code {result.ExitCode}"
+                : result.StandardError.Trim();
+            throw new InvalidOperationException(detail);
+        }
+
+        List<WddmAdapter>? adapters = JsonSerializer.Deserialize<List<WddmAdapter>>(
+            result.StandardOutput,
+            JsonOptions);
+
+        return adapters ?? [];
+    }
+
+    private static CaptureResult CaptureSelected(string probePath, WddmAdapter selected)
+    {
+        string outputDirectory = Path.Combine(Environment.CurrentDirectory, "Screenshots");
+        Directory.CreateDirectory(outputDirectory);
+
+        string outputPath = Path.GetFullPath(Path.Combine(
+            outputDirectory,
+            $"wddm-{DateTime.Now:yyyyMMdd-HHmmss-fff}.bmp"));
+
+        string[] arguments =
+        [
+            "--capture-luid",
+            selected.LuidHighPart.ToString(CultureInfo.InvariantCulture),
+            selected.LuidLowPart.ToString(CultureInfo.InvariantCulture),
+            outputPath
+        ];
+
+        ProcessResult result = RunNative(probePath, arguments);
+        if (result.ExitCode != 0)
+        {
+            string detail = string.IsNullOrWhiteSpace(result.StandardError)
+                ? $"exit code {result.ExitCode}"
+                : result.StandardError.Trim();
+            throw new InvalidOperationException(detail);
+        }
+
+        CaptureResult? capture = JsonSerializer.Deserialize<CaptureResult>(
+            result.StandardOutput,
+            JsonOptions);
+
+        if (capture is null || !capture.Ok)
+            throw new InvalidDataException("Native capture returned invalid JSON.");
+
+        return capture;
+    }
+
+    private static ProcessResult RunNative(string probePath, IReadOnlyList<string> arguments)
+    {
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = probePath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
         };
+
+        foreach (string argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        using Process process = new() { StartInfo = startInfo };
 
         if (!process.Start())
             throw new InvalidOperationException("Could not start D3DKMTProbe.exe.");
@@ -110,19 +182,7 @@ internal static class D3DkmtProbeClient
         string stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
 
-        if (process.ExitCode != 0)
-        {
-            string detail = string.IsNullOrWhiteSpace(stderr)
-                ? $"exit code {process.ExitCode}"
-                : stderr.Trim();
-            throw new InvalidOperationException(detail);
-        }
-
-        List<WddmAdapter>? adapters = JsonSerializer.Deserialize<List<WddmAdapter>>(
-            stdout,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-        return adapters ?? [];
+        return new ProcessResult(process.ExitCode, stdout, stderr);
     }
 
     private static string? FindProbe()
@@ -161,6 +221,14 @@ internal static class D3DkmtProbeClient
 
     private static string DisplayOrUnknown(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+
+    private static readonly JsonSerializerOptions JsonOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
+    private readonly record struct ProcessResult(
+        int ExitCode,
+        string StandardOutput,
+        string StandardError);
 }
 
 internal sealed class WddmAdapter
@@ -193,4 +261,16 @@ internal sealed class WddmAdapterType
     public bool HybridIntegrated { get; set; }
     public bool IndirectDisplayDevice { get; set; }
     public bool Paravirtualized { get; set; }
+}
+
+internal sealed class CaptureResult
+{
+    public bool Ok { get; set; }
+    public string Adapter { get; set; } = "";
+    public string Output { get; set; } = "";
+    public string Path { get; set; } = "";
+    public uint Width { get; set; }
+    public uint Height { get; set; }
+    public uint Rotation { get; set; }
+    public uint FeatureLevel { get; set; }
 }
