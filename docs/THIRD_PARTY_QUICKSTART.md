@@ -78,6 +78,9 @@ Example:
       "indirectDisplayDevice": false,
       "paravirtualized": false
     },
+    "outputCount": 1,
+    "attachedOutputCount": 1,
+    "hasAttachedDesktopOutput": true,
     "outputs": [
       {
         "index": 0,
@@ -103,6 +106,22 @@ The important field for screenshot requests is the top-level:
 That value is the device index.
 
 Do not assume that Intel is always index 0 or NVIDIA is always index 1. Read the list on the machine and select the device you want from the returned JSON.
+
+Also do not treat "adapter exists" as "adapter currently owns an active desktop output". On hybrid laptops, disconnecting HDMI can leave the NVIDIA adapter present while its `attachedOutputCount` becomes `0`; the internal panel may still be on Intel.
+
+For explicit selection, prefer devices where:
+
+```json
+"hasAttachedDesktopOutput": true
+```
+
+For applications that simply want a screenshot from whichever adapter can currently capture the desktop, use:
+
+```bat
+KernelScreenshotCli.exe -device auto -screenshot
+```
+
+This automatically falls back across adapters when display topology changes.
 
 ## 2. Capture a screenshot as bytes
 
@@ -246,6 +265,9 @@ public sealed class ScreenshotDevice
     public int Index { get; set; }
     public string Name { get; set; } = "";
     public string Wddm { get; set; } = "";
+    public int OutputCount { get; set; }
+    public int AttachedOutputCount { get; set; }
+    public bool HasAttachedDesktopOutput { get; set; }
     public List<ScreenshotOutput> Outputs { get; set; } = [];
 }
 
@@ -349,7 +371,10 @@ Usage:
 ```csharp
 List<ScreenshotDevice> devices = await ListDevicesAsync();
 
-byte[] screenshot = await CaptureAsync(devices[0].Index);
+ScreenshotDevice device = devices
+    .First(d => d.HasAttachedDesktopOutput);
+
+byte[] screenshot = await CaptureAsync(device.Index);
 
 await File.WriteAllBytesAsync("screenshot.bmp", screenshot);
 ```
