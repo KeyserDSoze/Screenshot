@@ -1,5 +1,7 @@
 # Kernel Screenshot Lab
 
+[![Build third-party release](https://github.com/KeyserDSoze/Screenshot/actions/workflows/release.yml/badge.svg)](https://github.com/KeyserDSoze/Screenshot/actions/workflows/release.yml)
+
 Educational Windows graphics project for studying the path from a C# application down to WDDM, `dxgkrnl`, and the active Intel/NVIDIA display drivers.
 
 ## Safe default path: D3DKMT
