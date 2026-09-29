@@ -115,6 +115,8 @@ For explicit selection, prefer devices where:
 "hasAttachedDesktopOutput": true
 ```
 
+The CLI treats a numeric `-device N` as a preferred adapter, not as a hard failure boundary: it tries that adapter first and automatically falls back to the other adapters if the preferred one cannot capture.
+
 For applications that simply want a screenshot from whichever adapter can currently capture the desktop, use:
 
 ```bat
