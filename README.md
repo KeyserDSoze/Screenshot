@@ -1,82 +1,98 @@
 # Kernel Screenshot Lab
 
-Windows educational project that captures the display from the CPU-mapped framebuffer owned by a WDDM kernel-mode display-only miniport driver.
+Educational Windows graphics project for studying the path from a C# application down to WDDM, `dxgkrnl`, and the active Intel/NVIDIA display drivers.
 
-## Capture path
+## Safe default path: D3DKMT
+
+The default app mode no longer replaces the machine's display miniport. It launches a small native helper that calls the documented WDDM kernel-thunk APIs:
 
 ```text
-left click
-  -> C# console app
-  -> DeviceIoControl("\\.\KernelScreenshot")
-  -> kernel control device
-  -> BASIC_DISPLAY_DRIVER::CopyScreenshotFrame
-  -> CURRENT_BDD_MODE::FrameBuffer.Ptr
-  -> PNG
+C# console app
+  -> D3DKMTProbe.exe
+  -> D3DKMTEnumAdapters2 / D3DKMTQueryAdapterInfo
+  -> Gdi32.dll
+  -> dxgkrnl.sys
+  -> active Intel/NVIDIA WDDM driver
 ```
 
-No GDI `GetPixel`, `BitBlt`, Desktop Duplication, Windows Graphics Capture, or D3D readback is used in the screenshot path.
+The helper reports each WDDM adapter's LUID, present-source count, WDDM version, PCI location and adapter-type flags. The C# frontend then lets you select an adapter.
 
-The base driver is Microsoft's KMDOD sample. Its framebuffer mapping ultimately uses `MmMapIoSpaceEx` on the physical framebuffer exposed to the display miniport.
+This mode does **not** install, replace, stop, or reconfigure the Intel/NVIDIA drivers.
 
-## Important limitation
+## Build the safe probe
 
-This is not a generic way to read the final scan-out of any NVIDIA/AMD/Intel WDDM driver. The modified KMDOD must be the active display driver on a suitable VESA/UEFI-style test adapter where a CPU-accessible linear framebuffer exists.
+From the repository root:
 
-Modern vendor drivers can use tiled/compressed allocations, overlays, cursor planes, HDR/color transforms and vendor-specific display-engine state.
+```bat
+"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" ^
+  Native\D3DKMTProbe\D3DKMTProbe.vcxproj ^
+  /p:Configuration=Debug ^
+  /p:Platform=x64
+```
 
-## Use a VM or disposable test machine
+Then run:
 
-A display miniport bug can black-screen or bugcheck Windows. Do not start on your primary machine.
-
-## Requirements
-
-- Windows 11 test VM/machine
-- Visual Studio 2022
-- WDK 11
-- .NET 8 SDK
-- WinDbg recommended
-
-## Build
-
-Open `Screenshot.sln` and build **Debug | x64**.
-
-Driver: `Driver/KMDOD/Sample/SampleDisplay.vcxproj`  
-Client: `App/KernelScreenshot.App.csproj`
-
-The driver output name is `KernelScreenshotDisplay.sys`.
-
-## Install
-
-Follow the upstream Microsoft KMDOD test-driver procedure, including test signing, on the test machine:
-
-https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/kernel-mode-display-only-miniport-driver-kmdod-sample/
-
-After the modified KMDOD is active, run the C# app elevated:
-
-```powershell
+```bat
 dotnet run --project .\App\KernelScreenshot.App.csproj
 ```
 
-Every global left-click creates:
+Expected shape:
 
 ```text
-.\Screenshots\kernel-YYYYMMDD-HHMMSS-fff.png
+Kernel Screenshot Lab - safe WDDM probe
+No display driver replacement is performed in this mode.
+
+WDDM adapters (D3DKMT -> dxgkrnl -> active vendor driver)
+
+[0] Intel(R) UHD Graphics
+    LUID=..., sources=..., WDDM=...
+    PCI=...
+    render=True, display=True, ...
+
+[1] NVIDIA GeForce RTX 4060 Laptop GPU
+    ...
 ```
 
-Ctrl+C exits.
+Selecting an adapter currently proves the WDDM communication path only. Pixel readback is the next stage.
 
-## What the kernel actually reads
+## Why this direction
 
-For each row:
+A modern Intel/NVIDIA GPU does not expose a universal CPU-readable linear "final screen framebuffer" to arbitrary kernel clients. Scan-out can involve tiled or compressed resources, multiplane overlays, cursor planes, color transforms, HDR and vendor-specific display-engine state.
 
-```cpp
-source = FrameBuffer.Ptr + y * SourcePitch;
-destination = output + y * (Width * 4);
-RtlCopyMemory(destination, source, Width * 4);
+D3DKMT is a documented low-level user-mode interface into the Windows graphics kernel. It allows us to inspect and target the adapters while keeping the vendor miniports active.
+
+## Legacy KMDOD framebuffer experiment
+
+The repository still contains the modified Microsoft KMDOD sample under `Driver/KMDOD`. That experiment reads a CPU-mapped VESA/UEFI-style framebuffer through:
+
+```text
+DeviceIoControl("\\.\KernelScreenshot")
+  -> BASIC_DISPLAY_DRIVER::CopyScreenshotFrame
+  -> CURRENT_BDD_MODE::FrameBuffer.Ptr
 ```
 
-The current version supports the 32-bpp KMDOD framebuffer and intentionally does not synchronize the read to vertical blank/present, so tearing is possible.
+Run that old client path only with:
 
-See `docs/ARCHITECTURE.md` for the full path and the WinDbg checkpoints.
+```bat
+dotnet run --project .\App\KernelScreenshot.App.csproj -- --legacy-kmdod
+```
+
+Do not force the KMDOD sample onto a normal Intel/NVIDIA production adapter. A display miniport mismatch can black-screen or bugcheck the machine. Use KMDOD only in a suitable VM or disposable test machine with the framebuffer model the sample expects.
+
+## Projects
+
+```text
+App/                         C# frontend
+Native/D3DKMTProbe/          safe native D3DKMT adapter probe
+Driver/KMDOD/                legacy experimental display-only miniport
+docs/ARCHITECTURE.md         architecture notes
+```
+
+## Current objective
+
+1. Enumerate and select a real WDDM adapter safely.
+2. Inspect documented adapter/driver properties through D3DKMT.
+3. Add a readback/capture path bound to the selected adapter without replacing its vendor driver.
+4. Compare that path with the legacy KMDOD physical-framebuffer experiment.
 
 The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-driver-samples license is copied under `THIRD_PARTY_LICENSES`.
