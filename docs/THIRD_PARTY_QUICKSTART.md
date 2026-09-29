@@ -338,14 +338,28 @@ for complete command syntax, stdout/stderr behavior, and exit-code rules.
 
 ## Release package
 
-GitHub Actions builds the x64 Release package.
+GitHub Actions builds and publishes the Windows x64 package automatically on every successful build of `main`.
 
-A tagged release contains a ZIP named like:
+No manual Git tag is required.
+
+Each build receives a generated version:
 
 ```text
-KernelScreenshot-win-x64-v0.1.0.zip
+v0.1.<GitHub Actions run number>
 ```
 
-Extract the ZIP and keep the EXE and DLL together.
+and creates a versioned release containing a ZIP such as:
 
-The same workflow can also be started manually from GitHub Actions; manual runs expose the package as a workflow artifact.
+```text
+KernelScreenshot-win-x64-v0.1.7.zip
+```
+
+The workflow also updates the release named:
+
+```text
+KernelScreenshot latest
+```
+
+so integrations that do not need to pin a specific build can always use the newest successful package.
+
+Extract the ZIP and keep `KernelScreenshotCli.exe` and `KernelScreenshot.dll` together.
