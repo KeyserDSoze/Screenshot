@@ -73,6 +73,40 @@ A modern Intel/NVIDIA GPU does not expose a universal CPU-readable linear "final
 
 D3DKMT is a documented low-level user-mode interface into the Windows graphics kernel. It allows us to inspect and target the adapters while keeping the vendor miniports active.
 
+## Reusable DLL
+
+The project now also builds `KernelScreenshot.dll`, a native x64 C ABI that exposes:
+
+```text
+KS_ListDevicesJson
+KS_CaptureBmp
+KS_GetLastErrorMessage
+```
+
+`KS_ListDevicesJson` returns UTF-8 JSON describing the WDDM adapters and their outputs. `KS_CaptureBmp(deviceIndex, ...)` returns the screenshot as an in-memory BMP byte array.
+
+Because a DLL is not a command-line executable, `KernelScreenshotCli.exe` provides the shell equivalent:
+
+```bat
+KernelScreenshotCli.exe -list
+KernelScreenshotCli.exe -device 0 -screenshot > shot.bmp
+KernelScreenshotCli.exe -device 0 -screenshot -out shot.bmp
+```
+
+Build both DLL and CLI with:
+
+```bat
+msbuild Native\KernelScreenshotCli\KernelScreenshotCli.vcxproj /p:Configuration=Debug /p:Platform=x64
+```
+
+Both outputs are placed under:
+
+```text
+Native\bin\x64\Debug\
+```
+
+See `docs/DLL_API.md` for the ABI and buffer contract.
+
 ## Legacy KMDOD framebuffer experiment
 
 The repository still contains the modified Microsoft KMDOD sample under `Driver/KMDOD`. That experiment reads a CPU-mapped VESA/UEFI-style framebuffer through:
