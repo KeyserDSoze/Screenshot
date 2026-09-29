@@ -20,6 +20,18 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        string[] args = Environment.GetCommandLineArgs().Skip(1).ToArray();
+        bool legacyKmdod = args.Any(arg => string.Equals(arg, "--legacy-kmdod", StringComparison.OrdinalIgnoreCase));
+
+        if (!legacyKmdod)
+        {
+            Console.WriteLine("Kernel Screenshot Lab - safe WDDM probe");
+            Console.WriteLine("No display driver replacement is performed in this mode.");
+            Console.WriteLine();
+            Environment.ExitCode = D3DkmtProbeClient.RunInteractive();
+            return;
+        }
+
         Console.WriteLine("Kernel Screenshot Lab");
         Console.WriteLine("Left click anywhere to capture; Ctrl+C exits.");
 
