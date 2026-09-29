@@ -138,6 +138,87 @@ namespace
         return WriteBmp(bmp, outputPath);
     }
 
+    int CaptureBmpPreferred(
+        uint32_t preferredDeviceIndex,
+        const std::string& outputPath)
+    {
+        std::vector<std::string> failures;
+
+        auto tryDevice =
+            [&](uint32_t deviceIndex, bool& deviceExists) -> int
+            {
+                std::vector<uint8_t> bmp;
+                const int status = CaptureBmpBytes(deviceIndex, bmp);
+
+                if (status == KS_DEVICE_NOT_FOUND)
+                {
+                    deviceExists = false;
+                    return status;
+                }
+
+                deviceExists = true;
+
+                if (status == KS_OK)
+                    return WriteBmp(bmp, outputPath);
+
+                failures.push_back(
+                    "device " +
+                    std::to_string(deviceIndex) +
+                    ": " +
+                    GetLastErrorText());
+
+                return status;
+            };
+
+        bool preferredExists = true;
+        int status =
+            tryDevice(preferredDeviceIndex, preferredExists);
+
+        if (status == KS_OK ||
+            status == 20 ||
+            status == 21 ||
+            status == 22)
+        {
+            return status;
+        }
+
+        for (uint32_t deviceIndex = 0; deviceIndex < 64; ++deviceIndex)
+        {
+            if (deviceIndex == preferredDeviceIndex)
+                continue;
+
+            bool deviceExists = true;
+            status = tryDevice(deviceIndex, deviceExists);
+
+            if (!deviceExists)
+                break;
+
+            if (status == KS_OK ||
+                status == 20 ||
+                status == 21 ||
+                status == 22)
+            {
+                return status;
+            }
+
+            if (status == KS_ENUMERATION_FAILED ||
+                status == KS_INVALID_ARGUMENT)
+            {
+                break;
+            }
+        }
+
+        std::cerr
+            << "Preferred device " << preferredDeviceIndex
+            << " could not capture, and no fallback adapter succeeded.";
+
+        for (const std::string& failure : failures)
+            std::cerr << "\n  " << failure;
+
+        std::cerr << "\n";
+        return KS_CAPTURE_FAILED;
+    }
+
     int CaptureBmpAuto(const std::string& outputPath)
     {
         std::vector<std::string> failures;
@@ -224,7 +305,7 @@ int main(int argc, char** argv)
             return 2;
         }
 
-        return CaptureBmp(
+        return CaptureBmpPreferred(
             static_cast<uint32_t>(parsed),
             outputPath);
     }
