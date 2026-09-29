@@ -181,6 +181,38 @@ namespace
                left.LowPart == right.LowPart;
     }
 
+
+    bool MapGdiDisplayToKmtAdapter(
+        const wchar_t* deviceName,
+        LUID& adapterLuid,
+        D3DDDI_VIDEO_PRESENT_SOURCE_ID& sourceId)
+    {
+        if (deviceName == nullptr || *deviceName == L'\0')
+            return false;
+
+        D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME open = {};
+        wcsncpy_s(
+            open.DeviceName,
+            ARRAYSIZE(open.DeviceName),
+            deviceName,
+            _TRUNCATE);
+
+        const NTSTATUS status =
+            D3DKMTOpenAdapterFromGdiDisplayName(&open);
+
+        if (!NtSuccess(status))
+            return false;
+
+        adapterLuid = open.AdapterLuid;
+        sourceId = open.VidPnSourceId;
+
+        D3DKMT_CLOSEADAPTER close = {};
+        close.hAdapter = open.hAdapter;
+        D3DKMTCloseAdapter(&close);
+
+        return true;
+    }
+
     int EnumerateDevices(std::vector<DeviceInfo>& devices)
     {
         devices.clear();
@@ -366,8 +398,32 @@ namespace
                 << ",\"desktopTop\":" << desc.DesktopCoordinates.top
                 << ",\"desktopRight\":" << desc.DesktopCoordinates.right
                 << ",\"desktopBottom\":" << desc.DesktopCoordinates.bottom
-                << ",\"rotation\":" << static_cast<unsigned int>(desc.Rotation)
-                << "}";
+                << ",\"rotation\":" << static_cast<unsigned int>(desc.Rotation);
+
+            LUID kmtLuid = {};
+            D3DDDI_VIDEO_PRESENT_SOURCE_ID sourceId = 0;
+            if (MapGdiDisplayToKmtAdapter(
+                    desc.DeviceName,
+                    kmtLuid,
+                    sourceId))
+            {
+                json
+                    << ",\"kmtAdapterLuidHighPart\":" << kmtLuid.HighPart
+                    << ",\"kmtAdapterLuidLowPart\":" << kmtLuid.LowPart
+                    << ",\"vidPnSourceId\":" << sourceId
+                    << ",\"kmtMatchesDxgiAdapter\":"
+                    << (SameLuid(kmtLuid, luid) ? "true" : "false");
+            }
+            else
+            {
+                json
+                    << ",\"kmtAdapterLuidHighPart\":null"
+                    << ",\"kmtAdapterLuidLowPart\":null"
+                    << ",\"vidPnSourceId\":null"
+                    << ",\"kmtMatchesDxgiAdapter\":null";
+            }
+
+            json << "}";
         }
 
         json << "]";
@@ -1017,10 +1073,127 @@ namespace
                 }
             }
 
+            // Resolve the GDI display name through D3DKMT as a second,
+            // lower-level ownership check. On hybrid systems the VidPN/GDI
+            // owner can differ from the adapter on which DXGI first exposed
+            // the output. If it does, retry Desktop Duplication on that exact
+            // KMT adapter before leaving DDA.
+            LUID kmtLuid = {};
+            D3DDDI_VIDEO_PRESENT_SOURCE_ID kmtSourceId = 0;
+            if (MapGdiDisplayToKmtAdapter(
+                    desc.DeviceName,
+                    kmtLuid,
+                    kmtSourceId) &&
+                !SameLuid(kmtLuid, selectedDevice.Luid))
+            {
+                ComPtr<IDXGIAdapter1> kmtAdapter =
+                    FindDxgiAdapter(factory.Get(), kmtLuid);
+
+                if (kmtAdapter != nullptr)
+                {
+                    ComPtr<ID3D11Device> kmtDevice;
+                    ComPtr<ID3D11DeviceContext> kmtContext;
+                    D3D_FEATURE_LEVEL kmtFeatureLevel =
+                        D3D_FEATURE_LEVEL_9_1;
+
+                    HRESULT kmtDeviceHr =
+                        D3D11CreateDevice(
+                            kmtAdapter.Get(),
+                            D3D_DRIVER_TYPE_UNKNOWN,
+                            nullptr,
+                            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                            nullptr,
+                            0,
+                            D3D11_SDK_VERSION,
+                            kmtDevice.GetAddressOf(),
+                            &kmtFeatureLevel,
+                            kmtContext.GetAddressOf());
+
+                    if (SUCCEEDED(kmtDeviceHr))
+                    {
+                        for (UINT kmtOutputIndex = 0;; ++kmtOutputIndex)
+                        {
+                            ComPtr<IDXGIOutput> kmtOutput;
+                            HRESULT kmtOutputHr =
+                                kmtAdapter->EnumOutputs(
+                                    kmtOutputIndex,
+                                    kmtOutput.GetAddressOf());
+
+                            if (kmtOutputHr == DXGI_ERROR_NOT_FOUND)
+                                break;
+
+                            if (FAILED(kmtOutputHr))
+                                break;
+
+                            DXGI_OUTPUT_DESC kmtDesc = {};
+                            if (FAILED(kmtOutput->GetDesc(&kmtDesc)))
+                                continue;
+
+                            if (_wcsicmp(
+                                    kmtDesc.DeviceName,
+                                    desc.DeviceName) != 0)
+                            {
+                                continue;
+                            }
+
+                            ComPtr<IDXGIOutputDuplication> kmtCandidate;
+
+                            ComPtr<IDXGIOutput5> kmtOutput5;
+                            if (SUCCEEDED(kmtOutput.As(&kmtOutput5)))
+                            {
+                                const DXGI_FORMAT supportedFormats[] =
+                                {
+                                    DXGI_FORMAT_B8G8R8A8_UNORM
+                                };
+
+                                HRESULT kmtDupHr =
+                                    kmtOutput5->DuplicateOutput1(
+                                        kmtDevice.Get(),
+                                        0,
+                                        static_cast<UINT>(
+                                            ARRAYSIZE(supportedFormats)),
+                                        supportedFormats,
+                                        kmtCandidate.GetAddressOf());
+
+                                if (SUCCEEDED(kmtDupHr))
+                                {
+                                    device = kmtDevice;
+                                    context = kmtContext;
+                                    duplication = kmtCandidate;
+                                    break;
+                                }
+                            }
+
+                            ComPtr<IDXGIOutput1> kmtOutput1;
+                            if (SUCCEEDED(kmtOutput.As(&kmtOutput1)))
+                            {
+                                kmtCandidate.Reset();
+
+                                HRESULT kmtDupHr =
+                                    kmtOutput1->DuplicateOutput(
+                                        kmtDevice.Get(),
+                                        kmtCandidate.GetAddressOf());
+
+                                if (SUCCEEDED(kmtDupHr))
+                                {
+                                    device = kmtDevice;
+                                    context = kmtContext;
+                                    duplication = kmtCandidate;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (duplication != nullptr)
+                    break;
+            }
+
             // Desktop Duplication can return DXGI_ERROR_UNSUPPORTED on
             // hybrid systems even though DXGI reports an attached output.
-            // Keep DDA as the primary backend, but fall back to the WinRT
-            // monitor capture interop for that exact HMONITOR.
+            // Keep DDA as the primary backend, and use Windows Graphics
+            // Capture only after the KMT ownership retry also fails.
             std::vector<uint8_t> fallbackBmp;
             std::string fallbackError;
             const int fallbackStatus =
