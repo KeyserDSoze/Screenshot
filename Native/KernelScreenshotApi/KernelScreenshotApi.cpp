@@ -764,7 +764,7 @@ namespace
     }
 }
 
-int KS_CALL KS_ListDevicesJson(
+KS_API int KS_CALL KS_ListDevicesJson(
     char* buffer,
     uint32_t* bufferBytes)
 {
@@ -787,7 +787,7 @@ int KS_CALL KS_ListDevicesJson(
         bufferBytes);
 }
 
-int KS_CALL KS_CaptureBmp(
+KS_API int KS_CALL KS_CaptureBmp(
     uint32_t deviceIndex,
     uint8_t* buffer,
     uint32_t* bufferBytes)
@@ -813,7 +813,7 @@ int KS_CALL KS_CaptureBmp(
         bufferBytes);
 }
 
-int KS_CALL KS_GetLastErrorMessage(
+KS_API int KS_CALL KS_GetLastErrorMessage(
     char* buffer,
     uint32_t* bufferBytes)
 {
