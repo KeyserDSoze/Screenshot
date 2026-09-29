@@ -149,6 +149,83 @@ Shell example:
 KernelScreenshotCli.exe -device 0 -screenshot > screenshot.bmp
 ```
 
+## Important: avoid stdout pipe deadlocks in C#
+
+Screenshot mode writes the entire BMP to `stdout`. A 2560x1600 32-bit BMP is roughly 16 MB, while an redirected process pipe is much smaller.
+
+Do **not** do this:
+
+```csharp
+await process.WaitForExitAsync();
+byte[] bmp = await ReadStdoutBytesAsync(process);
+```
+
+That can deadlock:
+
+```text
+KernelScreenshotCli.exe
+    -> fills redirected stdout pipe
+    -> waits for the parent process to read it
+
+C# parent
+    -> waits for KernelScreenshotCli.exe to exit
+    -> does not read stdout yet
+```
+
+The parent must drain stdout **while the child process is still running**. stderr should also be drained concurrently.
+
+A safe pattern is:
+
+```csharp
+static async Task<byte[]> CaptureAsync(int deviceIndex)
+{
+    var psi = new ProcessStartInfo
+    {
+        FileName = "KernelScreenshotCli.exe",
+        UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        CreateNoWindow = true
+    };
+
+    psi.ArgumentList.Add("-device");
+    psi.ArgumentList.Add(deviceIndex.ToString());
+    psi.ArgumentList.Add("-screenshot");
+
+    using Process process = Process.Start(psi)
+        ?? throw new InvalidOperationException("Cannot start KernelScreenshotCli.exe");
+
+    using var image = new MemoryStream();
+
+    Task stdoutTask =
+        process.StandardOutput.BaseStream.CopyToAsync(image);
+
+    Task<string> stderrTask =
+        process.StandardError.ReadToEndAsync();
+
+    Task exitTask =
+        process.WaitForExitAsync();
+
+    await Task.WhenAll(stdoutTask, stderrTask, exitTask);
+
+    string stderr = await stderrTask;
+
+    if (process.ExitCode != 0)
+        throw new InvalidOperationException(
+            $"KernelScreenshotCli exited with {process.ExitCode}: {stderr}");
+
+    byte[] bmp = image.ToArray();
+
+    if (bmp.Length < 2 || bmp[0] != (byte)'B' || bmp[1] != (byte)'M')
+        throw new InvalidDataException(
+            $"KernelScreenshotCli returned {bmp.Length} bytes, but they are not a BMP.");
+
+    return bmp;
+}
+```
+
+If the client wants to avoid binary stdout entirely, use `-out <file.bmp>` and read the file after the process exits.
+
 ## Capture screenshot directly to a file
 
 Command:
