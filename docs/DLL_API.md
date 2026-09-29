@@ -73,6 +73,9 @@ Example shape:
       "indirectDisplayDevice": false,
       "paravirtualized": false
     },
+    "outputCount": 1,
+    "attachedOutputCount": 1,
+    "hasAttachedDesktopOutput": true,
     "outputs": [
       {
         "index": 0,
@@ -90,6 +93,10 @@ Example shape:
 ```
 
 The `index` field is the value passed to `KS_CaptureBmp`.
+
+`outputCount` is the number of DXGI outputs enumerated on the adapter. `attachedOutputCount` counts only outputs currently attached to the Windows desktop, and `hasAttachedDesktopOutput` is true when that count is non-zero.
+
+An adapter can remain present in the device list even when it has no currently attached desktop output, so callers should not use adapter presence alone as the test for screenshot eligibility.
 
 ## Screenshot
 
