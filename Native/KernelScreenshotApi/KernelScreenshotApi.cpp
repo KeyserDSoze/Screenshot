@@ -160,6 +160,12 @@ namespace
         bool Paravirtualized = false;
     };
 
+    struct OutputInfo
+    {
+        UINT Index = 0;
+        DXGI_OUTPUT_DESC Desc = {};
+    };
+
     bool SameLuid(const LUID& left, const LUID& right)
     {
         return left.HighPart == right.HighPart &&
@@ -294,39 +300,57 @@ namespace
         IDXGIFactory1* factory,
         const LUID& luid)
     {
-        json << "\"outputs\":[";
+        std::vector<OutputInfo> outputs;
 
         ComPtr<IDXGIAdapter1> adapter = FindDxgiAdapter(factory, luid);
-        if (adapter == nullptr)
+        if (adapter != nullptr)
         {
-            json << "]";
-            return;
+            for (UINT index = 0;; ++index)
+            {
+                ComPtr<IDXGIOutput> output;
+                const HRESULT hr = adapter->EnumOutputs(index, output.GetAddressOf());
+                if (hr == DXGI_ERROR_NOT_FOUND)
+                    break;
+
+                if (FAILED(hr))
+                    break;
+
+                DXGI_OUTPUT_DESC desc = {};
+                if (FAILED(output->GetDesc(&desc)))
+                    continue;
+
+                OutputInfo item;
+                item.Index = index;
+                item.Desc = desc;
+                outputs.push_back(item);
+            }
         }
 
-        bool first = true;
-
-        for (UINT index = 0;; ++index)
+        UINT attachedOutputCount = 0;
+        for (const OutputInfo& output : outputs)
         {
-            ComPtr<IDXGIOutput> output;
-            const HRESULT hr = adapter->EnumOutputs(index, output.GetAddressOf());
-            if (hr == DXGI_ERROR_NOT_FOUND)
-                break;
+            if (output.Desc.AttachedToDesktop)
+                ++attachedOutputCount;
+        }
 
-            if (FAILED(hr))
-                break;
+        json
+            << "\"outputCount\":" << outputs.size()
+            << ",\"attachedOutputCount\":" << attachedOutputCount
+            << ",\"hasAttachedDesktopOutput\":"
+            << (attachedOutputCount != 0 ? "true" : "false")
+            << ",\"outputs\":[";
 
-            DXGI_OUTPUT_DESC desc = {};
-            if (FAILED(output->GetDesc(&desc)))
-                continue;
-
-            if (!first)
+        for (size_t i = 0; i < outputs.size(); ++i)
+        {
+            if (i != 0)
                 json << ",";
 
-            first = false;
+            const OutputInfo& output = outputs[i];
+            const DXGI_OUTPUT_DESC& desc = output.Desc;
 
             json
                 << "{"
-                << "\"index\":" << index
+                << "\"index\":" << output.Index
                 << ",\"name\":\"" << JsonEscape(WideToUtf8(desc.DeviceName)) << "\""
                 << ",\"attachedToDesktop\":" << (desc.AttachedToDesktop ? "true" : "false")
                 << ",\"desktopLeft\":" << desc.DesktopCoordinates.left
@@ -407,7 +431,7 @@ namespace
             if (SUCCEEDED(factoryHr))
                 AppendOutputsJson(json, factory.Get(), item.Luid);
             else
-                json << "\"outputs\":[]";
+                json << "\"outputCount\":0,\"attachedOutputCount\":0,\"hasAttachedDesktopOutput\":false,\"outputs\":[]";
 
             json << "}";
         }
@@ -484,6 +508,10 @@ namespace
         }
 
         ComPtr<IDXGIOutputDuplication> duplication;
+        UINT enumeratedOutputCount = 0;
+        UINT attachedOutputCount = 0;
+        HRESULT lastDuplicateHr = S_OK;
+        std::string lastDuplicateOutputName;
 
         for (UINT outputIndex = 0;; ++outputIndex)
         {
@@ -495,9 +523,16 @@ namespace
             if (FAILED(hr))
                 break;
 
+            ++enumeratedOutputCount;
+
             DXGI_OUTPUT_DESC desc = {};
-            if (FAILED(output->GetDesc(&desc)) || !desc.AttachedToDesktop)
+            if (FAILED(output->GetDesc(&desc)))
                 continue;
+
+            if (!desc.AttachedToDesktop)
+                continue;
+
+            ++attachedOutputCount;
 
             ComPtr<IDXGIOutput1> output1;
             if (FAILED(output.As(&output1)))
@@ -506,7 +541,11 @@ namespace
             ComPtr<IDXGIOutputDuplication> candidate;
             hr = output1->DuplicateOutput(device.Get(), candidate.GetAddressOf());
             if (FAILED(hr))
+            {
+                lastDuplicateHr = hr;
+                lastDuplicateOutputName = WideToUtf8(desc.DeviceName);
                 continue;
+            }
 
             duplication = candidate;
             break;
@@ -514,8 +553,25 @@ namespace
 
         if (duplication == nullptr)
         {
-            SetError(
-                "No attached desktop output on the selected adapter could be duplicated.");
+            std::ostringstream error;
+            error
+                << "No attached desktop output on the selected adapter could be duplicated."
+                << " deviceIndex=" << deviceIndex
+                << ", adapter=\"" << selectedDevice.Name << "\""
+                << ", enumeratedOutputs=" << enumeratedOutputCount
+                << ", attachedOutputs=" << attachedOutputCount;
+
+            if (FAILED(lastDuplicateHr))
+            {
+                error
+                    << ", lastDuplicateOutput=\"" << lastDuplicateOutputName << "\""
+                    << ", DuplicateOutput=" << HResultText(lastDuplicateHr);
+            }
+
+            error
+                << ". Run -list again after display topology changes.";
+
+            SetError(error.str());
             return KS_CAPTURE_FAILED;
         }
 
