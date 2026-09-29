@@ -121,22 +121,32 @@ The repository includes:
 .github/workflows/release.yml
 ```
 
-The workflow builds the x64 Release version of `KernelScreenshotCli.exe` and `KernelScreenshot.dll`, packages the public header and third-party documentation, and uploads a ZIP artifact.
+Every successful build of `main` is versioned automatically by GitHub Actions. No manual tag is required.
 
-It can be started manually from GitHub Actions.
+The workflow builds the x64 Release version of `KernelScreenshotCli.exe` and `KernelScreenshot.dll`, packages the public header and third-party documentation, uploads the workflow artifact, creates a new immutable build release, and refreshes the moving `latest` release.
 
-Pushing a tag beginning with `v` also creates or updates a GitHub Release and attaches the ZIP:
-
-```bat
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The resulting package is named like:
+The automatic version format is:
 
 ```text
-KernelScreenshot-win-x64-v0.1.0.zip
+v0.1.<GitHub Actions run number>
 ```
+
+For example:
+
+```text
+KernelScreenshot v0.1.7
+  KernelScreenshot-win-x64-v0.1.7.zip
+```
+
+At the same time the workflow recreates:
+
+```text
+KernelScreenshot latest
+```
+
+with the ZIP from the newest successful `main` build.
+
+Therefore a third-party project can either pin a specific build release or always download the `latest` package. No local `git tag` or manual release step is required.
 
 The package is designed so a third-party C# project can copy `KernelScreenshotCli.exe` and `KernelScreenshot.dll` next to its own executable and invoke the CLI by filename.
 
