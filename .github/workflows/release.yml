@@ -1,0 +1,83 @@
+name: Build third-party release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release x64
+        shell: cmd
+        run: msbuild Native\KernelScreenshotCli\KernelScreenshotCli.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+
+      - name: Create package
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}"
+          }
+          else {
+            $version = "manual-${{ github.run_number }}"
+          }
+
+          $packageName = "KernelScreenshot-win-x64-$version"
+          $packageDir = Join-Path "dist" $packageName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item "Native\bin\x64\Release\KernelScreenshotCli.exe" $packageDir
+          Copy-Item "Native\bin\x64\Release\KernelScreenshot.dll" $packageDir
+
+          if (Test-Path "Native\bin\x64\Release\KernelScreenshot.lib") {
+            Copy-Item "Native\bin\x64\Release\KernelScreenshot.lib" $packageDir
+          }
+
+          Copy-Item "Native\KernelScreenshotApi\KernelScreenshotApi.h" $packageDir
+          Copy-Item "docs\THIRD_PARTY_QUICKSTART.md" $packageDir
+          Copy-Item "docs\EXE_API.md" $packageDir
+          Copy-Item "docs\DLL_API.md" $packageDir
+
+          $zipPath = Join-Path "dist" "$packageName.zip"
+          Compress-Archive -Path "$packageDir\*" -DestinationPath $zipPath -Force
+
+          "PACKAGE_NAME=$packageName" >> $env:GITHUB_ENV
+          "PACKAGE_ZIP=$zipPath" >> $env:GITHUB_ENV
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: ${{ env.PACKAGE_ZIP }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $repo = "${{ github.repository }}"
+          $asset = $env:PACKAGE_ZIP
+
+          gh release view $tag --repo $repo 2>$null
+
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --repo $repo --clobber
+          }
+          else {
+            gh release create $tag $asset --repo $repo --title "KernelScreenshot $tag" --generate-notes
+          }
