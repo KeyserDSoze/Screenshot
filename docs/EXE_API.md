@@ -388,3 +388,7 @@ KernelScreenshotCli.exe -vendor-pipeline
 The command is diagnostic and read-only. It dynamically loads vendor runtime components already installed by the GPU driver. The first implementation probes Intel IGCL through `ControlLib.dll` and reports Intel adapter LUID/PCI identity, enumerated display encoders, applied timing, output/mux type, active/attached/dithering flags, display feature flags, and the current wire color model/depth when supported. It also probes NVIDIA NVAPI dynamically from `nvapi64.dll` and reports physical GPU identity, PCI/bus information, connected display IDs and their active/connected/OS-visible state, output type, and current SDR/HDR output mode when supported.
 
 The command does not install a kernel driver and does not modify display settings.
+
+## CCD/VidPN ownership fallback
+
+On hybrid systems, DXGI output enumeration can disagree with the active Windows display path. Capture now queries the active CCD topology and matches each source by adapter LUID. If Desktop Duplication cannot expose a usable output on the selected adapter but that adapter owns an active CCD/VidPN source, the exact GDI display name is resolved to an `HMONITOR` and the monitor-scoped Windows Graphics Capture backend is attempted. DDA remains the primary backend.

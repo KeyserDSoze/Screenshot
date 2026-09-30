@@ -420,6 +420,173 @@ namespace
         DXGI_OUTPUT_DESC Desc = {};
     };
 
+
+    struct ActiveDisplayPath
+    {
+        LUID AdapterLuid = {};
+        UINT32 SourceId = 0;
+        UINT32 TargetId = 0;
+        std::wstring GdiDeviceName;
+        HMONITOR Monitor = nullptr;
+    };
+
+    BOOL CALLBACK FindMonitorByGdiNameCallback(
+        HMONITOR monitor,
+        HDC,
+        LPRECT,
+        LPARAM parameter)
+    {
+        auto* state =
+            reinterpret_cast<std::pair<
+                const wchar_t*,
+                HMONITOR*>*>(parameter);
+
+        if (state == nullptr ||
+            state->first == nullptr ||
+            state->second == nullptr)
+        {
+            return TRUE;
+        }
+
+        MONITORINFOEXW info = {};
+        info.cbSize = sizeof(info);
+
+        if (GetMonitorInfoW(
+                monitor,
+                &info) &&
+            _wcsicmp(
+                info.szDevice,
+                state->first) == 0)
+        {
+            *state->second = monitor;
+            return FALSE;
+        }
+
+        return TRUE;
+    }
+
+    HMONITOR FindMonitorByGdiName(
+        const wchar_t* deviceName)
+    {
+        if (deviceName == nullptr ||
+            *deviceName == L'\0')
+        {
+            return nullptr;
+        }
+
+        HMONITOR result = nullptr;
+        std::pair<const wchar_t*, HMONITOR*> state{
+            deviceName,
+            &result
+        };
+
+        EnumDisplayMonitors(
+            nullptr,
+            nullptr,
+            FindMonitorByGdiNameCallback,
+            reinterpret_cast<LPARAM>(&state));
+
+        return result;
+    }
+
+    bool GetActiveDisplayPaths(
+        std::vector<ActiveDisplayPath>& activePaths)
+    {
+        activePaths.clear();
+
+        constexpr UINT32 flags =
+            QDC_ONLY_ACTIVE_PATHS;
+
+        UINT32 pathCount = 0;
+        UINT32 modeCount = 0;
+
+        LONG result =
+            GetDisplayConfigBufferSizes(
+                flags,
+                &pathCount,
+                &modeCount);
+
+        if (result != ERROR_SUCCESS)
+            return false;
+
+        std::vector<DISPLAYCONFIG_PATH_INFO>
+            paths(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO>
+            modes(modeCount);
+
+        do
+        {
+            result =
+                QueryDisplayConfig(
+                    flags,
+                    &pathCount,
+                    paths.data(),
+                    &modeCount,
+                    modes.data(),
+                    nullptr);
+
+            if (result ==
+                ERROR_INSUFFICIENT_BUFFER)
+            {
+                result =
+                    GetDisplayConfigBufferSizes(
+                        flags,
+                        &pathCount,
+                        &modeCount);
+
+                if (result != ERROR_SUCCESS)
+                    return false;
+
+                paths.assign(pathCount, {});
+                modes.assign(modeCount, {});
+            }
+        }
+        while (result ==
+               ERROR_INSUFFICIENT_BUFFER);
+
+        if (result != ERROR_SUCCESS)
+            return false;
+
+        paths.resize(pathCount);
+
+        for (const auto& path : paths)
+        {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME source = {};
+            source.header.type =
+                DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            source.header.size = sizeof(source);
+            source.header.adapterId =
+                path.sourceInfo.adapterId;
+            source.header.id =
+                path.sourceInfo.id;
+
+            if (DisplayConfigGetDeviceInfo(
+                    &source.header) !=
+                ERROR_SUCCESS)
+            {
+                continue;
+            }
+
+            ActiveDisplayPath item;
+            item.AdapterLuid =
+                path.sourceInfo.adapterId;
+            item.SourceId =
+                path.sourceInfo.id;
+            item.TargetId =
+                path.targetInfo.id;
+            item.GdiDeviceName =
+                source.viewGdiDeviceName;
+            item.Monitor =
+                FindMonitorByGdiName(
+                    source.viewGdiDeviceName);
+
+            activePaths.push_back(
+                std::move(item));
+        }
+
+        return true;
+    }
+
     bool SameLuid(const LUID& left, const LUID& right)
     {
         return left.HighPart == right.HighPart &&
@@ -2553,6 +2720,8 @@ namespace
         HRESULT lastDuplicate1Hr = S_OK;
         std::string lastDuplicateOutputName;
         std::string lastFallbackError;
+        std::string lastCcdFallbackOutputName;
+        UINT activeCcdPathCount = 0;
 
         for (UINT outputIndex = 0;; ++outputIndex)
         {
@@ -2758,6 +2927,59 @@ namespace
             lastFallbackError = fallbackError;
         }
 
+
+        if (duplication == nullptr)
+        {
+            // DXGI output enumeration can disagree with the active VidPN/CCD
+            // ownership on hybrid laptops. Use the active CCD source LUID as
+            // the source of truth and, for this selected adapter, resolve the
+            // exact GDI monitor to an HMONITOR. This keeps DDA first; the
+            // monitor-level Windows Graphics Capture fallback is only used
+            // after DDA cannot expose a duplicable IDXGIOutput.
+            std::vector<ActiveDisplayPath> activePaths;
+            if (GetActiveDisplayPaths(activePaths))
+            {
+                for (const ActiveDisplayPath& activePath :
+                     activePaths)
+                {
+                    if (!SameLuid(
+                            activePath.AdapterLuid,
+                            selectedDevice.Luid))
+                    {
+                        continue;
+                    }
+
+                    ++activeCcdPathCount;
+
+                    if (activePath.Monitor == nullptr)
+                        continue;
+
+                    lastCcdFallbackOutputName =
+                        WideToUtf8(
+                            activePath.GdiDeviceName.c_str());
+
+                    std::vector<uint8_t> fallbackBmp;
+                    std::string fallbackError;
+
+                    const int fallbackStatus =
+                        CaptureMonitorWithWindowsGraphicsCapture(
+                            activePath.Monitor,
+                            fallbackBmp,
+                            fallbackError);
+
+                    if (fallbackStatus == KS_OK)
+                    {
+                        bmpBytes =
+                            std::move(fallbackBmp);
+                        return KS_OK;
+                    }
+
+                    lastFallbackError =
+                        fallbackError;
+                }
+            }
+        }
+
         if (duplication == nullptr)
         {
             std::ostringstream error;
@@ -2766,12 +2988,21 @@ namespace
                 << " deviceIndex=" << deviceIndex
                 << ", adapter=\"" << selectedDevice.Name << "\""
                 << ", enumeratedOutputs=" << enumeratedOutputCount
-                << ", attachedOutputs=" << attachedOutputCount;
+                << ", attachedOutputs=" << attachedOutputCount
+                << ", activeCcdPaths=" << activeCcdPathCount;
 
             if (!lastDuplicateOutputName.empty())
             {
                 error
                     << ", lastOutput=\"" << lastDuplicateOutputName << "\"";
+            }
+
+            if (!lastCcdFallbackOutputName.empty())
+            {
+                error
+                    << ", ccdFallbackOutput=\""
+                    << lastCcdFallbackOutputName
+                    << "\"";
             }
 
             if (FAILED(lastDuplicate1Hr))

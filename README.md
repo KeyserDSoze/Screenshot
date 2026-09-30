@@ -202,3 +202,7 @@ The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-
 ### Vendor display probe
 
 `-vendor-pipeline` optionally loads the Intel IGCL runtime already shipped with supported Intel graphics drivers (`ControlLib.dll`) and reports adapter/display timing, output type, mux type, display flags, feature flags and current wire color model/depth. NVIDIA NVAPI is also probed dynamically from the installed driver: physical GPUs, PCI/bus identity, connected display IDs, connection state, output type and current SDR/HDR output mode are reported when the interfaces are available. No driver is installed or replaced.
+
+### Hybrid capture ownership
+
+The capture engine now treats the active CCD/VidPN source adapter LUID as the authoritative display owner when DXGI output enumeration disagrees on hybrid laptops. Desktop Duplication is still attempted first. If the selected adapter owns an active CCD path but DXGI exposes no duplicable output, the engine resolves the exact `\\.\DISPLAYn` source to its `HMONITOR` and uses the existing monitor-scoped Windows Graphics Capture backend only as the final fallback.
