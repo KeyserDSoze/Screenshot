@@ -112,7 +112,8 @@ Example report shape:
     "mode": "auto",
     "requestedDeviceIndex": null,
     "requestedDisplayName": null,
-    "autoCandidateKind": "activeCcdOwner"
+    "autoCandidateKind": "activeCcdOwner",
+    "strictAdapter": false
   },
   "result": {
     "attemptedDeviceIndex": 0,

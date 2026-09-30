@@ -4600,6 +4600,7 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
         ResetCaptureReport();
         g_PendingBmp.clear();
         g_PendingBmpAuto = false;
+        g_PendingBmpStrict = false;
         g_PendingBmpDisplayName.clear();
         g_HasPendingBmp = false;
 
@@ -4624,6 +4625,7 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
         }
 
         g_PendingBmpDeviceIndex = UINT32_MAX;
+        g_PendingBmpStrict = false;
         g_PendingBmpDisplayName =
             normalizedUtf8;
         g_HasPendingBmp = true;
@@ -4652,6 +4654,7 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
         if (status == KS_OK)
         {
             g_PendingBmp.clear();
+            g_PendingBmpStrict = false;
             g_PendingBmpDisplayName.clear();
             g_HasPendingBmp = false;
         }
