@@ -48,6 +48,28 @@ namespace
         return 0;
     }
 
+    int PrintPipeline()
+    {
+        uint32_t bytes = 0;
+        int status = KS_ListDisplayPipelinesJson(nullptr, &bytes);
+        if (status != KS_OK)
+        {
+            std::cerr << GetLastErrorText() << "\n";
+            return status;
+        }
+
+        std::vector<char> json(bytes);
+        status = KS_ListDisplayPipelinesJson(json.data(), &bytes);
+        if (status != KS_OK)
+        {
+            std::cerr << GetLastErrorText() << "\n";
+            return status;
+        }
+
+        std::cout << json.data() << "\n";
+        return 0;
+    }
+
     int CaptureBmpBytes(
         uint32_t deviceIndex,
         std::vector<uint8_t>& bmp)
@@ -264,6 +286,7 @@ namespace
         std::cerr
             << "Usage:\n"
             << "  KernelScreenshotCli.exe -list\n"
+            << "  KernelScreenshotCli.exe -pipeline\n"
             << "  KernelScreenshotCli.exe -device <index|auto> -screenshot\n"
             << "  KernelScreenshotCli.exe -device <index|auto> -screenshot -out <file.bmp>\n";
     }
@@ -273,6 +296,9 @@ int main(int argc, char** argv)
 {
     if (argc == 2 && std::string(argv[1]) == "-list")
         return PrintList();
+
+    if (argc == 2 && std::string(argv[1]) == "-pipeline")
+        return PrintPipeline();
 
     if (argc >= 4 &&
         std::string(argv[1]) == "-device" &&

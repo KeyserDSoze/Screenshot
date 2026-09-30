@@ -24,6 +24,11 @@ enum KS_STATUS
 // Call once with buffer == nullptr to obtain the required size.
 KS_API int KS_CALL KS_ListDevicesJson(char* buffer, uint32_t* bufferBytes);
 
+// UTF-8 JSON describing active Windows display paths, CCD signal timing,
+// D3DKMT/VidPN ownership and current KMT display mode.
+// Call once with buffer == nullptr to obtain the required size.
+KS_API int KS_CALL KS_ListDisplayPipelinesJson(char* buffer, uint32_t* bufferBytes);
+
 // Returns a complete 32-bit BMP file in memory.
 // Call once with buffer == nullptr to obtain the required byte count.
 KS_API int KS_CALL KS_CaptureBmp(

@@ -506,6 +506,456 @@ namespace
         return KS_OK;
     }
 
+
+    int BuildDisplayPipelinesJson(std::string& jsonText)
+    {
+        constexpr UINT32 flags = QDC_ONLY_ACTIVE_PATHS;
+
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+
+        LONG result = ERROR_SUCCESS;
+        UINT32 pathCount = 0;
+        UINT32 modeCount = 0;
+
+        do
+        {
+            pathCount = 0;
+            modeCount = 0;
+
+            result = GetDisplayConfigBufferSizes(
+                flags,
+                &pathCount,
+                &modeCount);
+
+            if (result != ERROR_SUCCESS)
+            {
+                SetError(
+                    "GetDisplayConfigBufferSizes failed: " +
+                    std::to_string(result));
+                return KS_ENUMERATION_FAILED;
+            }
+
+            paths.assign(pathCount, {});
+            modes.assign(modeCount, {});
+
+            result = QueryDisplayConfig(
+                flags,
+                &pathCount,
+                paths.data(),
+                &modeCount,
+                modes.data(),
+                nullptr);
+        }
+        while (result == ERROR_INSUFFICIENT_BUFFER);
+
+        if (result != ERROR_SUCCESS)
+        {
+            SetError(
+                "QueryDisplayConfig failed: " +
+                std::to_string(result));
+            return KS_ENUMERATION_FAILED;
+        }
+
+        paths.resize(pathCount);
+        modes.resize(modeCount);
+
+        std::ostringstream json;
+        json << "[";
+
+        for (size_t pathIndex = 0; pathIndex < paths.size(); ++pathIndex)
+        {
+            if (pathIndex != 0)
+                json << ",";
+
+            const DISPLAYCONFIG_PATH_INFO& path = paths[pathIndex];
+
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName = {};
+            sourceName.header.type =
+                DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            sourceName.header.size = sizeof(sourceName);
+            sourceName.header.adapterId =
+                path.sourceInfo.adapterId;
+            sourceName.header.id =
+                path.sourceInfo.id;
+
+            const LONG sourceNameResult =
+                DisplayConfigGetDeviceInfo(
+                    &sourceName.header);
+
+            DISPLAYCONFIG_TARGET_DEVICE_NAME targetName = {};
+            targetName.header.type =
+                DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            targetName.header.size = sizeof(targetName);
+            targetName.header.adapterId =
+                path.targetInfo.adapterId;
+            targetName.header.id =
+                path.targetInfo.id;
+
+            const LONG targetNameResult =
+                DisplayConfigGetDeviceInfo(
+                    &targetName.header);
+
+            DISPLAYCONFIG_ADAPTER_NAME adapterName = {};
+            adapterName.header.type =
+                DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME;
+            adapterName.header.size = sizeof(adapterName);
+            adapterName.header.adapterId =
+                path.sourceInfo.adapterId;
+
+            const LONG adapterNameResult =
+                DisplayConfigGetDeviceInfo(
+                    &adapterName.header);
+
+            const std::string gdiName =
+                sourceNameResult == ERROR_SUCCESS
+                ? WideToUtf8(sourceName.viewGdiDeviceName)
+                : std::string();
+
+            json
+                << "{"
+                << "\"pathIndex\":" << pathIndex
+                << ",\"active\":"
+                << ((path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0
+                    ? "true"
+                    : "false")
+                << ",\"source\":{"
+                << "\"adapterLuidHighPart\":"
+                << path.sourceInfo.adapterId.HighPart
+                << ",\"adapterLuidLowPart\":"
+                << path.sourceInfo.adapterId.LowPart
+                << ",\"id\":" << path.sourceInfo.id
+                << ",\"statusFlags\":"
+                << path.sourceInfo.statusFlags
+                << ",\"gdiDeviceName\":";
+
+            if (sourceNameResult == ERROR_SUCCESS)
+                json << "\"" << JsonEscape(gdiName) << "\"";
+            else
+                json << "null";
+
+            json << "}";
+
+            json
+                << ",\"target\":{"
+                << "\"adapterLuidHighPart\":"
+                << path.targetInfo.adapterId.HighPart
+                << ",\"adapterLuidLowPart\":"
+                << path.targetInfo.adapterId.LowPart
+                << ",\"id\":" << path.targetInfo.id
+                << ",\"outputTechnology\":"
+                << static_cast<int>(path.targetInfo.outputTechnology)
+                << ",\"rotation\":"
+                << static_cast<unsigned int>(path.targetInfo.rotation)
+                << ",\"scaling\":"
+                << static_cast<unsigned int>(path.targetInfo.scaling)
+                << ",\"refreshRateNumerator\":"
+                << path.targetInfo.refreshRate.Numerator
+                << ",\"refreshRateDenominator\":"
+                << path.targetInfo.refreshRate.Denominator
+                << ",\"scanLineOrdering\":"
+                << static_cast<unsigned int>(
+                    path.targetInfo.scanLineOrdering)
+                << ",\"targetAvailable\":"
+                << (path.targetInfo.targetAvailable
+                    ? "true"
+                    : "false")
+                << ",\"statusFlags\":"
+                << path.targetInfo.statusFlags
+                << ",\"friendlyName\":";
+
+            if (targetNameResult == ERROR_SUCCESS &&
+                targetName.monitorFriendlyDeviceName[0] != L'\0')
+            {
+                json
+                    << "\""
+                    << JsonEscape(
+                        WideToUtf8(
+                            targetName.monitorFriendlyDeviceName))
+                    << "\"";
+            }
+            else
+            {
+                json << "null";
+            }
+
+            json << ",\"monitorDevicePath\":";
+
+            if (targetNameResult == ERROR_SUCCESS &&
+                targetName.monitorDevicePath[0] != L'\0')
+            {
+                json
+                    << "\""
+                    << JsonEscape(
+                        WideToUtf8(
+                            targetName.monitorDevicePath))
+                    << "\"";
+            }
+            else
+            {
+                json << "null";
+            }
+
+            json << "}";
+
+            json << ",\"adapterDevicePath\":";
+
+            if (adapterNameResult == ERROR_SUCCESS)
+            {
+                json
+                    << "\""
+                    << JsonEscape(
+                        WideToUtf8(
+                            adapterName.adapterDevicePath))
+                    << "\"";
+            }
+            else
+            {
+                json << "null";
+            }
+
+            json << ",\"ccdSourceMode\":";
+
+            if (path.sourceInfo.modeInfoIdx !=
+                    DISPLAYCONFIG_PATH_MODE_IDX_INVALID &&
+                path.sourceInfo.modeInfoIdx < modes.size() &&
+                modes[path.sourceInfo.modeInfoIdx].infoType ==
+                    DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
+            {
+                const DISPLAYCONFIG_SOURCE_MODE& sourceMode =
+                    modes[path.sourceInfo.modeInfoIdx].sourceMode;
+
+                json
+                    << "{"
+                    << "\"width\":" << sourceMode.width
+                    << ",\"height\":" << sourceMode.height
+                    << ",\"pixelFormat\":"
+                    << static_cast<unsigned int>(
+                        sourceMode.pixelFormat)
+                    << ",\"positionX\":"
+                    << sourceMode.position.x
+                    << ",\"positionY\":"
+                    << sourceMode.position.y
+                    << "}";
+            }
+            else
+            {
+                json << "null";
+            }
+
+            json << ",\"ccdTargetSignal\":";
+
+            if (path.targetInfo.modeInfoIdx !=
+                    DISPLAYCONFIG_PATH_MODE_IDX_INVALID &&
+                path.targetInfo.modeInfoIdx < modes.size() &&
+                modes[path.targetInfo.modeInfoIdx].infoType ==
+                    DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
+            {
+                const DISPLAYCONFIG_VIDEO_SIGNAL_INFO& signal =
+                    modes[path.targetInfo.modeInfoIdx]
+                        .targetMode.targetVideoSignalInfo;
+
+                json
+                    << "{"
+                    << "\"pixelRate\":" << signal.pixelRate
+                    << ",\"hSyncNumerator\":"
+                    << signal.hSyncFreq.Numerator
+                    << ",\"hSyncDenominator\":"
+                    << signal.hSyncFreq.Denominator
+                    << ",\"vSyncNumerator\":"
+                    << signal.vSyncFreq.Numerator
+                    << ",\"vSyncDenominator\":"
+                    << signal.vSyncFreq.Denominator
+                    << ",\"activeWidth\":"
+                    << signal.activeSize.cx
+                    << ",\"activeHeight\":"
+                    << signal.activeSize.cy
+                    << ",\"totalWidth\":"
+                    << signal.totalSize.cx
+                    << ",\"totalHeight\":"
+                    << signal.totalSize.cy
+                    << ",\"videoStandard\":"
+                    << signal.videoStandard
+                    << ",\"scanLineOrdering\":"
+                    << static_cast<unsigned int>(
+                        signal.scanLineOrdering)
+                    << "}";
+            }
+            else
+            {
+                json << "null";
+            }
+
+            json << ",\"kmt\":";
+
+            if (!gdiName.empty())
+            {
+                D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME open = {};
+                wcsncpy_s(
+                    open.DeviceName,
+                    ARRAYSIZE(open.DeviceName),
+                    sourceName.viewGdiDeviceName,
+                    _TRUNCATE);
+
+                const NTSTATUS openStatus =
+                    D3DKMTOpenAdapterFromGdiDisplayName(&open);
+
+                if (NtSuccess(openStatus))
+                {
+                    D3DKMT_ADAPTERREGISTRYINFO registryInfo = {};
+                    D3DKMT_DRIVERVERSION driverVersion = {};
+
+                    D3DKMT_CURRENTDISPLAYMODE currentMode = {};
+                    currentMode.VidPnSourceId =
+                        open.VidPnSourceId;
+
+                    D3DKMT_OUTPUTDUPLCONTEXTSCOUNT duplCount = {};
+                    duplCount.VidPnSourceId =
+                        open.VidPnSourceId;
+
+                    const bool hasRegistry =
+                        QueryAdapter(
+                            open.hAdapter,
+                            KMTQAITYPE_ADAPTERREGISTRYINFO,
+                            registryInfo);
+
+                    const bool hasDriverVersion =
+                        QueryAdapter(
+                            open.hAdapter,
+                            KMTQAITYPE_DRIVERVERSION,
+                            driverVersion);
+
+                    const bool hasCurrentMode =
+                        QueryAdapter(
+                            open.hAdapter,
+                            KMTQAITYPE_CURRENTDISPLAYMODE,
+                            currentMode);
+
+                    const bool hasDuplCount =
+                        QueryAdapter(
+                            open.hAdapter,
+                            KMTQAITYPE_OUTPUTDUPLCONTEXTSCOUNT,
+                            duplCount);
+
+                    json
+                        << "{"
+                        << "\"adapterLuidHighPart\":"
+                        << open.AdapterLuid.HighPart
+                        << ",\"adapterLuidLowPart\":"
+                        << open.AdapterLuid.LowPart
+                        << ",\"vidPnSourceId\":"
+                        << open.VidPnSourceId
+                        << ",\"matchesCcdSourceAdapter\":"
+                        << (SameLuid(
+                                open.AdapterLuid,
+                                path.sourceInfo.adapterId)
+                            ? "true"
+                            : "false")
+                        << ",\"adapterName\":";
+
+                    if (hasRegistry)
+                    {
+                        json
+                            << "\""
+                            << JsonEscape(
+                                WideToUtf8(
+                                    registryInfo.AdapterString))
+                            << "\"";
+                    }
+                    else
+                    {
+                        json << "null";
+                    }
+
+                    json << ",\"wddm\":";
+
+                    if (hasDriverVersion)
+                    {
+                        json
+                            << "\""
+                            << JsonEscape(
+                                WddmLabel(driverVersion))
+                            << "\"";
+                    }
+                    else
+                    {
+                        json << "null";
+                    }
+
+                    json << ",\"outputDuplicationClientCount\":";
+
+                    if (hasDuplCount)
+                        json << duplCount.OutputDuplicationCount;
+                    else
+                        json << "null";
+
+                    json << ",\"currentDisplayMode\":";
+
+                    if (hasCurrentMode)
+                    {
+                        const D3DKMT_DISPLAYMODE& mode =
+                            currentMode.DisplayMode;
+
+                        json
+                            << "{"
+                            << "\"width\":" << mode.Width
+                            << ",\"height\":" << mode.Height
+                            << ",\"format\":"
+                            << static_cast<unsigned int>(
+                                mode.Format)
+                            << ",\"integerRefreshRate\":"
+                            << mode.IntegerRefreshRate
+                            << ",\"refreshNumerator\":"
+                            << mode.RefreshRate.Numerator
+                            << ",\"refreshDenominator\":"
+                            << mode.RefreshRate.Denominator
+                            << ",\"scanLineOrdering\":"
+                            << static_cast<unsigned int>(
+                                mode.ScanLineOrdering)
+                            << ",\"displayOrientation\":"
+                            << static_cast<unsigned int>(
+                                mode.DisplayOrientation)
+                            << ",\"displayFixedOutput\":"
+                            << mode.DisplayFixedOutput
+                            << "}";
+                    }
+                    else
+                    {
+                        json << "null";
+                    }
+
+                    json << "}";
+
+                    D3DKMT_CLOSEADAPTER close = {};
+                    close.hAdapter = open.hAdapter;
+                    D3DKMTCloseAdapter(&close);
+                }
+                else
+                {
+                    json
+                        << "{"
+                        << "\"openStatus\":\"0x"
+                        << std::hex
+                        << std::uppercase
+                        << static_cast<ULONG>(openStatus)
+                        << std::dec
+                        << "\""
+                        << "}";
+                }
+            }
+            else
+            {
+                json << "null";
+            }
+
+            json << "}";
+        }
+
+        json << "]";
+        jsonText = json.str();
+        return KS_OK;
+    }
+
     struct FrameGuard
     {
         IDXGIOutputDuplication* Duplication = nullptr;
@@ -1417,6 +1867,29 @@ KS_API int KS_CALL KS_ListDevicesJson(
 
     std::string jsonText;
     const int status = BuildDevicesJson(jsonText);
+    if (status != KS_OK)
+        return status;
+
+    return CopyTextResult(
+        jsonText,
+        buffer,
+        bufferBytes);
+}
+
+KS_API int KS_CALL KS_ListDisplayPipelinesJson(
+    char* buffer,
+    uint32_t* bufferBytes)
+{
+    g_LastError.clear();
+
+    if (bufferBytes == nullptr)
+    {
+        SetError("bufferBytes is null.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    std::string jsonText;
+    const int status = BuildDisplayPipelinesJson(jsonText);
     if (status != KS_OK)
         return status;
 

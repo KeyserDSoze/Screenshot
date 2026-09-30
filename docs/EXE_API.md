@@ -139,6 +139,28 @@ Each device also reports:
 
 A graphics adapter can remain present in `-list` even when it currently has no attached desktop output. This is common on hybrid laptops when an external display is disconnected.
 
+## Inspect the active display pipeline
+
+Command:
+
+```bat
+KernelScreenshotCli.exe -pipeline
+```
+
+Successful stdout is UTF-8 JSON describing each active CCD display path. It correlates the Windows source and target with:
+
+- source/target adapter LUID and IDs;
+- GDI display name such as `\\\\.\\DISPLAY1`;
+- monitor friendly name and monitor device path;
+- CCD source desktop dimensions and position;
+- target signal pixel rate, sync frequencies, active/total size and scan-line ordering;
+- the D3DKMT adapter LUID resolved from the GDI display name;
+- the VidPN source ID used by the KMD;
+- the current D3DKMT display mode;
+- the current number of Desktop Duplication clients on that VidPN source.
+
+This command does not capture pixels and does not install or replace any display driver. It is diagnostic output for understanding the Windows/WDDM scan-out path before adding optional Intel IGCL or NVIDIA NVAPI probes.
+
 ## Automatic adapter fallback
 
 For third-party applications that do not need to force a specific GPU, use:

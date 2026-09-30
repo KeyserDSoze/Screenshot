@@ -89,10 +89,13 @@ KS_GetLastErrorMessage
 
 The CLI also supports `-device auto`, and numeric `-device N` is treated as a preferred adapter with automatic fallback to the other adapters if the preferred one cannot capture. This makes HDMI connect/disconnect changes on hybrid laptops much more robust.
 
+`-pipeline` prints the active Windows display paths as JSON and correlates CCD source/target timing with the lower-level D3DKMT adapter LUID, VidPN source ID, current KMT display mode and current Desktop Duplication client count. This is intended for diagnosing hybrid Intel/NVIDIA display ownership and scan-out configuration.
+
 Because a DLL is not a command-line executable, `KernelScreenshotCli.exe` provides the shell equivalent:
 
 ```bat
 KernelScreenshotCli.exe -list
+KernelScreenshotCli.exe -pipeline
 KernelScreenshotCli.exe -device 0 -screenshot > shot.bmp
 KernelScreenshotCli.exe -device auto -screenshot > shot.bmp
 KernelScreenshotCli.exe -device 0 -screenshot -out shot.bmp
