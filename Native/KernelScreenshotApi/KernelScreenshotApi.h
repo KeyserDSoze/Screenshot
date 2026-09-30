@@ -29,7 +29,7 @@ KS_API int KS_CALL KS_ListDevicesJson(char* buffer, uint32_t* bufferBytes);
 // Call once with buffer == nullptr to obtain the required size.
 KS_API int KS_CALL KS_ListDisplayPipelinesJson(char* buffer, uint32_t* bufferBytes);
 
-// UTF-8 JSON from optional vendor driver interfaces (currently Intel IGCL).
+// UTF-8 JSON from optional vendor driver interfaces (Intel IGCL / NVIDIA NVAPI).
 // This is diagnostic only and does not install or replace display drivers.
 KS_API int KS_CALL KS_ListVendorPipelinesJson(char* buffer, uint32_t* bufferBytes);
 
@@ -37,6 +37,14 @@ KS_API int KS_CALL KS_ListVendorPipelinesJson(char* buffer, uint32_t* bufferByte
 // Call once with buffer == nullptr to obtain the required byte count.
 KS_API int KS_CALL KS_CaptureBmp(
     uint32_t deviceIndex,
+    uint8_t* buffer,
+    uint32_t* bufferBytes);
+
+// Automatically selects an active display owner from the Windows CCD/VidPN
+// topology, preferring active owners before any remaining adapter fallback.
+// Returns a complete 32-bit BMP file in memory.
+// Call once with buffer == nullptr to obtain the required byte count.
+KS_API int KS_CALL KS_CaptureBmpAuto(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 

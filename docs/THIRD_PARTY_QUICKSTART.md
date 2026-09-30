@@ -27,105 +27,73 @@ Then the C# application can launch `KernelScreenshotCli.exe` by filename only. N
 
 ## What the executable does
 
-`KernelScreenshotCli.exe` exposes two operations:
+`KernelScreenshotCli.exe` exposes automatic one-frame capture plus optional diagnostics and explicit device selection:
 
 ```text
+-screenshot
+-screenshot -out <file.bmp>
 -list
--device <index> -screenshot
+-pipeline
+-vendor-pipeline
+-device <index|auto> -screenshot
 ```
 
-The first operation discovers the WDDM graphics adapters and outputs available on the machine.
-
-The second operation selects one adapter by the index returned by `-list`, captures one desktop frame, and returns a complete BMP image.
+For ordinary screenshot use, start with `-screenshot`. It automatically resolves the active CCD/VidPN display owner, captures one frame, and returns a complete BMP image. `-list`, `-pipeline`, `-vendor-pipeline`, and numeric `-device N` are available when an integration needs diagnostics or explicit adapter control.
 
 Internally the tool uses the active vendor graphics driver. It does not replace the Intel, NVIDIA, or AMD display driver.
 
-## 1. Get the device list
+## 1. Capture a screenshot automatically
 
-Run:
+For the normal one-frame use case, no device enumeration is required:
 
 ```bat
-KernelScreenshotCli.exe -list
+KernelScreenshotCli.exe -screenshot
 ```
 
-Exit code `0` means success.
+Exit code `0` means success. stdout contains only the binary bytes of a complete 32-bit BMP; stderr is reserved for errors.
 
-Successful stdout is UTF-8 JSON. stderr is reserved for errors.
+Automatic mode queries the active Windows CCD/VidPN topology first and tries the adapters that actually own active display paths before any remaining fallback adapter. This is the recommended mode for hybrid Intel/NVIDIA laptops because the adapter that DXGI enumerates first is not always the physical scan-out owner.
 
-Example:
+To save directly to a file:
 
-```json
-[
-  {
-    "index": 0,
-    "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
-    "luidHighPart": 0,
-    "luidLowPart": 16855171,
-    "sources": 4,
-    "wddm": "3.2",
-    "pci": {
-      "bus": 1,
-      "device": 0,
-      "function": 0
-    },
-    "type": {
-      "renderSupported": true,
-      "displaySupported": true,
-      "softwareDevice": false,
-      "postDevice": false,
-      "hybridDiscrete": true,
-      "hybridIntegrated": false,
-      "indirectDisplayDevice": false,
-      "paravirtualized": false
-    },
-    "outputCount": 1,
-    "attachedOutputCount": 1,
-    "hasAttachedDesktopOutput": true,
-    "outputs": [
-      {
-        "index": 0,
-        "name": "\\\\.\\DISPLAY1",
-        "attachedToDesktop": true,
-        "desktopLeft": 0,
-        "desktopTop": 0,
-        "desktopRight": 1920,
-        "desktopBottom": 1080,
-        "rotation": 1
-      }
-    ]
-  }
-]
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 ```
 
-The important field for screenshot requests is the top-level:
-
-```json
-"index": 0
-```
-
-That value is the device index.
-
-Do not assume that Intel is always index 0 or NVIDIA is always index 1. Read the list on the machine and select the device you want from the returned JSON.
-
-Also do not treat "adapter exists" as "adapter currently owns an active desktop output". On hybrid laptops, disconnecting HDMI can leave the NVIDIA adapter present while its `attachedOutputCount` becomes `0`; the internal panel may still be on Intel.
-
-For explicit selection, prefer devices where:
-
-```json
-"hasAttachedDesktopOutput": true
-```
-
-The CLI treats a numeric `-device N` as a preferred adapter, not as a hard failure boundary: it tries that adapter first and automatically falls back to the other adapters if the preferred one cannot capture.
-
-For applications that simply want a screenshot from whichever adapter can currently capture the desktop, use:
+The compatibility spelling below is equivalent:
 
 ```bat
 KernelScreenshotCli.exe -device auto -screenshot
 ```
 
-This automatically falls back across adapters when display topology changes.
+## 2. Optional device and pipeline diagnostics
 
-## 2. Capture a screenshot as bytes
+Use `-list` only when the application needs to inspect adapters or explicitly prefer one:
+
+```bat
+KernelScreenshotCli.exe -list
+```
+
+Successful stdout is UTF-8 JSON. Do not assume that Intel is always index 0 or NVIDIA is always index 1. On hybrid laptops, an adapter can remain enumerated while it no longer owns an active desktop path.
+
+For lower-level ownership and signal diagnostics:
+
+```bat
+KernelScreenshotCli.exe -pipeline
+KernelScreenshotCli.exe -vendor-pipeline
+```
+
+`-pipeline` reports the Windows CCD/D3DKMT/VidPN view. `-vendor-pipeline` adds Intel IGCL and NVIDIA NVAPI information when those runtimes are installed.
+
+Numeric selection remains available:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot
+```
+
+A numeric index is treated as a preferred adapter; if it fails, the CLI retains its fault-tolerant fallback to other enumerated adapters.
+
+## 3. Capture a screenshot as bytes
 
 Run:
 
@@ -144,17 +112,17 @@ There is no JSON wrapper around the screenshot.
 For a command-line test:
 
 ```bat
-KernelScreenshotCli.exe -device 0 -screenshot > screenshot.bmp
+KernelScreenshotCli.exe -screenshot > screenshot.bmp
 ```
 
 A third-party application should read stdout as a binary stream, not as text.
 
-## 3. Capture directly to a file
+## 4. Capture directly to a file
 
 For tests or applications that prefer a file:
 
 ```bat
-KernelScreenshotCli.exe -device 0 -screenshot -out screenshot.bmp
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 ```
 
 The process exit code must still be checked.
@@ -187,7 +155,7 @@ The parent must drain stdout **while the child process is still running**. stder
 A safe pattern is:
 
 ```csharp
-static async Task<byte[]> CaptureAsync(int deviceIndex)
+static async Task<byte[]> CaptureAsync()
 {
     var psi = new ProcessStartInfo
     {
@@ -198,8 +166,6 @@ static async Task<byte[]> CaptureAsync(int deviceIndex)
         CreateNoWindow = true
     };
 
-    psi.ArgumentList.Add("-device");
-    psi.ArgumentList.Add(deviceIndex.ToString());
     psi.ArgumentList.Add("-screenshot");
 
     using Process process = Process.Start(psi)
@@ -334,7 +300,7 @@ static async Task<List<ScreenshotDevice>> ListDevicesAsync()
 ```csharp
 using System.Diagnostics;
 
-static async Task<byte[]> CaptureAsync(int deviceIndex)
+static async Task<byte[]> CaptureAsync()
 {
     var psi = new ProcessStartInfo
     {
@@ -345,8 +311,6 @@ static async Task<byte[]> CaptureAsync(int deviceIndex)
         CreateNoWindow = true
     };
 
-    psi.ArgumentList.Add("-device");
-    psi.ArgumentList.Add(deviceIndex.ToString());
     psi.ArgumentList.Add("-screenshot");
 
     using Process process = Process.Start(psi)
@@ -371,12 +335,7 @@ static async Task<byte[]> CaptureAsync(int deviceIndex)
 Usage:
 
 ```csharp
-List<ScreenshotDevice> devices = await ListDevicesAsync();
-
-ScreenshotDevice device = devices
-    .First(d => d.HasAttachedDesktopOutput);
-
-byte[] screenshot = await CaptureAsync(device.Index);
+byte[] screenshot = await CaptureAsync();
 
 await File.WriteAllBytesAsync("screenshot.bmp", screenshot);
 ```
@@ -414,13 +373,13 @@ If you intentionally install the tool somewhere else, your application is respon
 
 If starting a child process is not desirable, load `KernelScreenshot.dll` directly.
 
-The DLL API exposes:
+The DLL API exposes automatic capture directly:
 
 ```text
-KS_ListDevicesJson
-KS_CaptureBmp
-KS_GetLastErrorMessage
+KS_CaptureBmpAuto
 ```
+
+and also exposes `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
 
 See:
 

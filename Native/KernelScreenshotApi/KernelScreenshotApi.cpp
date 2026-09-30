@@ -30,6 +30,7 @@ namespace
     thread_local std::string g_LastError;
     thread_local std::vector<uint8_t> g_PendingBmp;
     thread_local uint32_t g_PendingBmpDeviceIndex = 0;
+    thread_local bool g_PendingBmpAuto = false;
     thread_local bool g_HasPendingBmp = false;
 
 
@@ -3107,6 +3108,129 @@ namespace
         return textureStatus;
     }
 
+
+    int BuildBmpBytesAuto(
+        std::vector<uint8_t>& bmpBytes)
+    {
+        std::vector<DeviceInfo> devices;
+        const int enumerateStatus =
+            EnumerateDevices(devices);
+
+        if (enumerateStatus != KS_OK)
+            return enumerateStatus;
+
+        if (devices.empty())
+        {
+            SetError(
+                "Auto capture found no WDDM adapters.");
+            return KS_DEVICE_NOT_FOUND;
+        }
+
+        std::vector<uint32_t> candidates;
+        size_t activeOwnerCount = 0;
+
+        auto addCandidate =
+            [&](uint32_t index)
+            {
+                if (std::find(
+                        candidates.begin(),
+                        candidates.end(),
+                        index) == candidates.end())
+                {
+                    candidates.push_back(index);
+                }
+            };
+
+        std::vector<ActiveDisplayPath> activePaths;
+        if (GetActiveDisplayPaths(activePaths))
+        {
+            for (const ActiveDisplayPath& path :
+                 activePaths)
+            {
+                for (const DeviceInfo& device :
+                     devices)
+                {
+                    if (SameLuid(
+                            path.AdapterLuid,
+                            device.Luid))
+                    {
+                        const size_t before =
+                            candidates.size();
+
+                        addCandidate(device.Index);
+
+                        if (candidates.size() != before)
+                            ++activeOwnerCount;
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If CCD did not resolve an owner, or if all active owners fail,
+        // retain a compatibility fallback across the remaining WDDM
+        // adapters. The important ordering guarantee is that active
+        // CCD/VidPN owners are always tried first.
+        for (const DeviceInfo& device : devices)
+            addCandidate(device.Index);
+
+        std::vector<std::string> failures;
+
+        for (size_t candidateIndex = 0;
+             candidateIndex < candidates.size();
+             ++candidateIndex)
+        {
+            const uint32_t deviceIndex =
+                candidates[candidateIndex];
+
+            bmpBytes.clear();
+
+            const int status =
+                BuildBmpBytes(
+                    deviceIndex,
+                    bmpBytes);
+
+            if (status == KS_OK)
+                return KS_OK;
+
+            std::ostringstream failure;
+            failure
+                << (candidateIndex < activeOwnerCount
+                    ? "active CCD owner"
+                    : "fallback adapter")
+                << " device "
+                << deviceIndex
+                << ": "
+                << g_LastError;
+
+            failures.push_back(
+                failure.str());
+        }
+
+        std::ostringstream error;
+        error
+            << "Auto capture failed after trying "
+            << activeOwnerCount
+            << " active CCD/VidPN owner adapter(s) first";
+
+        if (candidates.size() > activeOwnerCount)
+        {
+            error
+                << " and "
+                << (candidates.size() - activeOwnerCount)
+                << " remaining fallback adapter(s)";
+        }
+
+        error << ".";
+
+        for (const std::string& failure : failures)
+            error << "\n  " << failure;
+
+        SetError(error.str());
+        return KS_CAPTURE_FAILED;
+    }
+
     int CopyTextResult(
         const std::string& value,
         char* buffer,
@@ -3292,12 +3416,14 @@ KS_API int KS_CALL KS_CaptureBmp(
         }
 
         g_PendingBmpDeviceIndex = deviceIndex;
+        g_PendingBmpAuto = false;
         g_HasPendingBmp = true;
         *bufferBytes = static_cast<uint32_t>(g_PendingBmp.size());
         return KS_OK;
     }
 
     if (g_HasPendingBmp &&
+        !g_PendingBmpAuto &&
         g_PendingBmpDeviceIndex == deviceIndex)
     {
         const int status =
@@ -3320,6 +3446,79 @@ KS_API int KS_CALL KS_CaptureBmp(
     std::vector<uint8_t> bmpBytes;
     const int status =
         BuildBmpBytes(deviceIndex, bmpBytes);
+
+    if (status != KS_OK)
+        return status;
+
+    return CopyBinaryResult(
+        bmpBytes,
+        buffer,
+        bufferBytes);
+}
+
+
+KS_API int KS_CALL KS_CaptureBmpAuto(
+    uint8_t* buffer,
+    uint32_t* bufferBytes)
+{
+    g_LastError.clear();
+
+    if (bufferBytes == nullptr)
+    {
+        SetError("bufferBytes is null.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    if (buffer == nullptr)
+    {
+        g_PendingBmp.clear();
+        g_HasPendingBmp = false;
+
+        const int status =
+            BuildBmpBytesAuto(g_PendingBmp);
+
+        if (status != KS_OK)
+            return status;
+
+        if (g_PendingBmp.size() > UINT32_MAX)
+        {
+            g_PendingBmp.clear();
+            SetError("Captured BMP is too large.");
+            return KS_CAPTURE_FAILED;
+        }
+
+        g_PendingBmpDeviceIndex = UINT32_MAX;
+        g_PendingBmpAuto = true;
+        g_HasPendingBmp = true;
+        *bufferBytes =
+            static_cast<uint32_t>(
+                g_PendingBmp.size());
+
+        return KS_OK;
+    }
+
+    if (g_HasPendingBmp &&
+        g_PendingBmpAuto)
+    {
+        const int status =
+            CopyBinaryResult(
+                g_PendingBmp,
+                buffer,
+                bufferBytes);
+
+        if (status == KS_OK)
+        {
+            g_PendingBmp.clear();
+            g_PendingBmpAuto = false;
+            g_HasPendingBmp = false;
+        }
+
+        return status;
+    }
+
+    std::vector<uint8_t> bmpBytes;
+    const int status =
+        BuildBmpBytesAuto(bmpBytes);
 
     if (status != KS_OK)
         return status;

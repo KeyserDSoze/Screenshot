@@ -97,7 +97,7 @@ Because a DLL is not a command-line executable, `KernelScreenshotCli.exe` provid
 KernelScreenshotCli.exe -list
 KernelScreenshotCli.exe -pipeline
 KernelScreenshotCli.exe -vendor-pipeline
-KernelScreenshotCli.exe -device 0 -screenshot > shot.bmp
+KernelScreenshotCli.exe -screenshot -out shot.bmp
 KernelScreenshotCli.exe -device auto -screenshot > shot.bmp
 KernelScreenshotCli.exe -device 0 -screenshot -out shot.bmp
 ```
@@ -189,19 +189,36 @@ docs/EXE_API.md
 docs/DLL_API.md
 ```
 
-## Current objective
+## Current status
 
-1. Enumerate and select a real WDDM adapter safely.
-2. Inspect documented adapter/driver properties through D3DKMT.
-3. Capture one frame from the selected adapter through Desktop Duplication and CPU staging readback. **Implemented.**
-4. Add output selection, repeated capture, pointer/rotation handling and timing diagnostics.
-5. Compare that path with the legacy KMDOD physical-framebuffer experiment.
+The user-mode capture path is complete for the current one-frame scope:
+
+1. WDDM adapters and active display ownership are enumerated through D3DKMT and CCD.
+2. `-pipeline` exposes source/target timing, adapter LUID, VidPN source ID and current display mode.
+3. `-vendor-pipeline` adds Intel IGCL and NVIDIA NVAPI diagnostics when those vendor runtimes are installed.
+4. Automatic capture selects active CCD/VidPN display owners first, then keeps a compatibility fallback across remaining adapters.
+5. Desktop Duplication remains the primary capture backend; exact-monitor Windows Graphics Capture is used only as the final hybrid fallback.
+6. The public DLL and CLI both support automatic capture, and the release workflow publishes versioned and `latest` x64 packages from `main`.
+
+Explicit output selection, repeated/high-rate capture, cursor composition and advanced rotation/HDR conversion are outside the finalized one-frame API and can be added later without changing the automatic owner-selection contract.
 
 The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-driver-samples license is copied under `THIRD_PARTY_LICENSES`.
 
 ### Vendor display probe
 
 `-vendor-pipeline` optionally loads the Intel IGCL runtime already shipped with supported Intel graphics drivers (`ControlLib.dll`) and reports adapter/display timing, output type, mux type, display flags, feature flags and current wire color model/depth. NVIDIA NVAPI is also probed dynamically from the installed driver: physical GPUs, PCI/bus identity, connected display IDs, connection state, output type and current SDR/HDR output mode are reported when the interfaces are available. No driver is installed or replaced.
+
+### Automatic capture selection
+
+The recommended one-frame command is now:
+
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp
+```
+
+`-screenshot` with no `-device` is equivalent to `-device auto`. Auto mode queries the active Windows CCD/VidPN topology first, maps each active source adapter LUID back to the enumerated WDDM devices, and tries those active display owners before any remaining adapter fallback. This makes hybrid Intel/NVIDIA capture deterministic when DXGI enumeration disagrees with the physical display owner. Explicit `-device N` remains available for diagnostics and vendor-specific testing.
+
+The DLL exposes the same behavior through `KS_CaptureBmpAuto`.
 
 ### Hybrid capture ownership
 

@@ -161,43 +161,53 @@ Successful stdout is UTF-8 JSON describing each active CCD display path. It corr
 
 This command does not capture pixels and does not install or replace any display driver. It is diagnostic output for understanding the Windows/WDDM scan-out path before adding optional Intel IGCL or NVIDIA NVAPI probes.
 
-## Automatic adapter fallback
+## Automatic display-owner selection
 
-For third-party applications that do not need to force a specific GPU, use:
+The recommended capture command is:
+
+```bat
+KernelScreenshotCli.exe -screenshot
+```
+
+or, equivalently:
 
 ```bat
 KernelScreenshotCli.exe -device auto -screenshot
 ```
 
-The CLI tries the currently enumerated adapters in order and returns the first screenshot that succeeds.
+Automatic mode no longer starts by blindly trying adapter indexes. It first queries the active Windows CCD topology, takes the adapter LUIDs that own active VidPN display paths, maps those LUIDs to the enumerated WDDM devices, removes duplicates while preserving active-path order, and tries those active display owners first. Only if every active owner fails does it try any remaining adapters as a compatibility fallback.
 
-Before leaving Desktop Duplication on hybrid systems, the capture engine also resolves each `\\.\DISPLAYn` name through `D3DKMTOpenAdapterFromGdiDisplayName`. If the low-level VidPN/GDI owner LUID differs from the DXGI adapter that first exposed the output, it retries `DuplicateOutput1` / `DuplicateOutput` on that KMT-resolved adapter. Windows Graphics Capture remains only the final fallback after both Desktop Duplication ownership paths fail.
+Inside each selected adapter, Desktop Duplication remains the primary backend. The capture engine also resolves `\\.\DISPLAYn` through D3DKMT; if DXGI cannot expose a duplicable output even though CCD says that adapter owns an active path, the exact monitor is resolved to `HMONITOR` and Windows Graphics Capture is used as the final monitor-scoped fallback.
 
-Numeric device selection is also fault-tolerant. For example:
+This owner-first behavior is designed for hybrid Intel/NVIDIA systems where DXGI adapter/output enumeration may not match the physical scan-out owner.
+
+The direct-to-file form is:
+
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp
+```
+
+`-device auto` remains supported for compatibility and behaves the same way.
+
+Numeric device selection is still available for diagnostics:
 
 ```bat
 KernelScreenshotCli.exe -device 0 -screenshot
 ```
 
-means "prefer device 0". The CLI tries device 0 first; if capture fails because that adapter no longer owns a usable desktop output, it automatically tries the other enumerated adapters before returning an error.
+A numeric device is treated as the preferred adapter; if it cannot capture, the CLI keeps its previous fault-tolerant behavior and tries the other enumerated adapters before failing.
 
-This is useful when display topology changes, for example when an HDMI monitor is connected or disconnected.
-
-The file-output variant is:
-
-```bat
-KernelScreenshotCli.exe -device auto -screenshot -out screenshot.bmp
-```
-
-For multi-monitor applications that need a specific physical desktop region, explicit adapter/output selection is preferable to `auto`. The current CLI still captures the first attached duplicable output on the chosen adapter.
+For multi-monitor applications that need a specific physical desktop region, explicit output selection is still outside the current CLI contract. Automatic mode returns the first successful one-frame capture from the active owner ordering.
 
 ## Capture screenshot to stdout
 
 Command:
 
 ```bat
-KernelScreenshotCli.exe -device 0 -screenshot
+KernelScreenshotCli.exe -screenshot
 ```
+
+Explicit adapter selection remains available with `-device N`.
 
 Successful stdout contains only the raw bytes of one complete 32-bit BMP file.
 
@@ -214,7 +224,7 @@ A third-party process should:
 Shell example:
 
 ```bat
-KernelScreenshotCli.exe -device 0 -screenshot > screenshot.bmp
+KernelScreenshotCli.exe -screenshot > screenshot.bmp
 ```
 
 ## Important: avoid stdout pipe deadlocks in C#
@@ -245,7 +255,7 @@ The parent must drain stdout **while the child process is still running**. stder
 A safe pattern is:
 
 ```csharp
-static async Task<byte[]> CaptureAsync(int deviceIndex)
+static async Task<byte[]> CaptureAsync()
 {
     var psi = new ProcessStartInfo
     {
@@ -256,8 +266,6 @@ static async Task<byte[]> CaptureAsync(int deviceIndex)
         CreateNoWindow = true
     };
 
-    psi.ArgumentList.Add("-device");
-    psi.ArgumentList.Add(deviceIndex.ToString());
     psi.ArgumentList.Add("-screenshot");
 
     using Process process = Process.Start(psi)
@@ -299,7 +307,7 @@ If the client wants to avoid binary stdout entirely, use `-out <file.bmp>` and r
 Command:
 
 ```bat
-KernelScreenshotCli.exe -device 0 -screenshot -out screenshot.bmp
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 ```
 
 With `-out`, the BMP is written directly to the requested file.
@@ -308,22 +316,22 @@ The caller should check the process exit code before treating the file as valid.
 
 ## Typical third-party flow
 
+For applications that only need one desktop screenshot, device enumeration is no longer required:
+
 ```text
-1. KernelScreenshotCli.exe -list
+1. KernelScreenshotCli.exe -screenshot
         |
         v
-   parse JSON
-
-2. choose an adapter with hasAttachedDesktopOutput=true
-   or use -device auto
+   auto-resolve active CCD/VidPN owner
         |
         v
-
-3. KernelScreenshotCli.exe -device <index|auto> -screenshot
+   DDA first, monitor-scoped WGC only as final fallback
         |
         v
    read BMP bytes from stdout
 ```
+
+Use `-list`, `-pipeline`, `-vendor-pipeline`, or explicit `-device N` only when the caller needs diagnostics, topology inspection, or a preferred adapter.
 
 ## C# example using the executable name only
 

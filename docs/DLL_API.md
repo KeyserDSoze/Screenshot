@@ -11,8 +11,20 @@ int __cdecl KS_ListDevicesJson(
     char* buffer,
     uint32_t* bufferBytes);
 
+int __cdecl KS_ListDisplayPipelinesJson(
+    char* buffer,
+    uint32_t* bufferBytes);
+
+int __cdecl KS_ListVendorPipelinesJson(
+    char* buffer,
+    uint32_t* bufferBytes);
+
 int __cdecl KS_CaptureBmp(
     uint32_t deviceIndex,
+    uint8_t* buffer,
+    uint32_t* bufferBytes);
+
+int __cdecl KS_CaptureBmpAuto(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
@@ -22,6 +34,8 @@ int __cdecl KS_GetLastErrorMessage(
 ```
 
 All functions return one of the `KS_STATUS` values declared in `KernelScreenshotApi.h`.
+
+`KS_CaptureBmpAuto` is the recommended one-frame capture entry point for callers that do not need to force a specific adapter.
 
 ## Buffer pattern
 
@@ -100,16 +114,27 @@ An adapter can remain present in the device list even when it has no currently a
 
 ## Screenshot
 
-`KS_CaptureBmp(deviceIndex, ...)`:
+### Recommended: automatic owner selection
 
-1. resolves the selected D3DKMT adapter;
-2. matches the same LUID to a DXGI adapter;
-3. creates a D3D11 device on that adapter;
-4. uses Desktop Duplication on the first attached duplicable output;
-5. copies the desktop texture to a CPU-readable staging texture;
-6. returns a complete 32-bit BMP file as bytes.
+`KS_CaptureBmpAuto(...)` queries the active CCD/VidPN topology, maps active source adapter LUIDs to WDDM devices, tries those active display owners first, and only then considers remaining adapters as a compatibility fallback. Desktop Duplication stays the primary backend; the exact monitor-scoped Windows Graphics Capture path is used only when hybrid ownership prevents DDA from exposing the active output.
 
 Example:
+
+```c
+uint32_t bytes = 0;
+int status = KS_CaptureBmpAuto(NULL, &bytes);
+
+uint8_t* bmp = malloc(bytes);
+status = KS_CaptureBmpAuto(bmp, &bytes);
+
+// bmp[0..bytes-1] is a complete BMP file.
+```
+
+The two calls are paired on the same thread: the DLL captures once during the size query and retains that frame for the following copy call, avoiding a second wait for a new desktop present.
+
+### Explicit adapter selection
+
+`KS_CaptureBmp(deviceIndex, ...)` keeps explicit adapter selection for diagnostics and integrations that already choose a WDDM device. It resolves the selected D3DKMT adapter, matches its LUID to DXGI, attempts Desktop Duplication, applies the D3DKMT ownership retry, and uses the CCD-resolved monitor fallback when needed.
 
 ```c
 uint32_t bytes = 0;
@@ -117,8 +142,6 @@ int status = KS_CaptureBmp(1, NULL, &bytes);
 
 uint8_t* bmp = malloc(bytes);
 status = KS_CaptureBmp(1, bmp, &bytes);
-
-// bmp[0..bytes-1] is a complete BMP file.
 ```
 
 ## DLL location for third-party applications
