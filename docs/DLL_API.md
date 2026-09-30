@@ -28,6 +28,11 @@ int __cdecl KS_CaptureBmpAuto(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
+int __cdecl KS_CaptureDisplayBmp(
+    const char* displayName,
+    uint8_t* buffer,
+    uint32_t* bufferBytes);
+
 int __cdecl KS_GetLastErrorMessage(
     char* buffer,
     uint32_t* bufferBytes);
@@ -131,6 +136,20 @@ status = KS_CaptureBmpAuto(bmp, &bytes);
 ```
 
 The two calls are paired on the same thread: the DLL captures once during the size query and retains that frame for the following copy call, avoiding a second wait for a new desktop present.
+
+### Exact active display
+
+`KS_CaptureDisplayBmp(displayName, ...)` captures one exact active GDI display such as `DISPLAY1` or `\\.\DISPLAY1`. The function looks up that display in the active CCD/VidPN topology, uses its adapter LUID as the owner, attempts Desktop Duplication on that exact output, and falls back only to the matching `HMONITOR` through Windows Graphics Capture.
+
+```c
+uint32_t bytes = 0;
+int status = KS_CaptureDisplayBmp("DISPLAY1", NULL, &bytes);
+
+uint8_t* bmp = malloc(bytes);
+status = KS_CaptureDisplayBmp("DISPLAY1", bmp, &bytes);
+```
+
+The same two-call cached-frame contract used by `KS_CaptureBmpAuto` applies here.
 
 ### Explicit adapter selection
 

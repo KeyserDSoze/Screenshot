@@ -48,6 +48,15 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
+// Captures one specific active GDI display (for example DISPLAY1 or
+// \\.\\DISPLAY1). The active CCD/VidPN path determines the owning adapter.
+// Desktop Duplication is attempted on that exact output first, followed by
+// monitor-scoped Windows Graphics Capture when needed.
+KS_API int KS_CALL KS_CaptureDisplayBmp(
+    const char* displayName,
+    uint8_t* buffer,
+    uint32_t* bufferBytes);
+
 // UTF-8 diagnostic text for the most recent API failure on the calling thread.
 // bufferBytes includes the terminating NUL.
 KS_API int KS_CALL KS_GetLastErrorMessage(char* buffer, uint32_t* bufferBytes);

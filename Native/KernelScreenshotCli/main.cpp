@@ -166,6 +166,53 @@ namespace
         return status;
     }
 
+
+    int CaptureBmpBytesDisplay(
+        const std::string& displayName,
+        std::vector<uint8_t>& bmp)
+    {
+        uint32_t bytes = 0;
+        int status =
+            KS_CaptureDisplayBmp(
+                displayName.c_str(),
+                nullptr,
+                &bytes);
+
+        if (status != KS_OK)
+            return status;
+
+        bmp.assign(bytes, 0);
+
+        for (int attempt = 0;
+             attempt < 2;
+             ++attempt)
+        {
+            uint32_t capacity =
+                static_cast<uint32_t>(
+                    bmp.size());
+
+            status =
+                KS_CaptureDisplayBmp(
+                    displayName.c_str(),
+                    bmp.data(),
+                    &capacity);
+
+            if (status == KS_BUFFER_TOO_SMALL)
+            {
+                bmp.resize(capacity);
+                continue;
+            }
+
+            if (status != KS_OK)
+                return status;
+
+            bmp.resize(capacity);
+            return KS_OK;
+        }
+
+        return status;
+    }
+
     int WriteBmp(
         const std::vector<uint8_t>& bmp,
         const std::string& outputPath)
@@ -305,6 +352,30 @@ namespace
         return KS_CAPTURE_FAILED;
     }
 
+
+    int CaptureBmpDisplay(
+        const std::string& displayName,
+        const std::string& outputPath)
+    {
+        std::vector<uint8_t> bmp;
+        const int status =
+            CaptureBmpBytesDisplay(
+                displayName,
+                bmp);
+
+        if (status != KS_OK)
+        {
+            std::cerr
+                << GetLastErrorText()
+                << "\n";
+            return status;
+        }
+
+        return WriteBmp(
+            bmp,
+            outputPath);
+    }
+
     int CaptureBmpAuto(const std::string& outputPath)
     {
         std::vector<uint8_t> bmp;
@@ -333,6 +404,8 @@ namespace
             << "  KernelScreenshotCli.exe -vendor-pipeline\n"
             << "  KernelScreenshotCli.exe -screenshot\n"
             << "  KernelScreenshotCli.exe -screenshot -out <file.bmp>\n"
+            << "  KernelScreenshotCli.exe -display <DISPLAYn> -screenshot\n"
+            << "  KernelScreenshotCli.exe -display <DISPLAYn> -screenshot -out <file.bmp>\n"
             << "  KernelScreenshotCli.exe -device <index|auto> -screenshot\n"
             << "  KernelScreenshotCli.exe -device <index|auto> -screenshot -out <file.bmp>\n";
     }
@@ -366,6 +439,28 @@ int main(int argc, char** argv)
         }
 
         return CaptureBmpAuto(outputPath);
+    }
+
+    if (argc >= 4 &&
+        std::string(argv[1]) == "-display" &&
+        std::string(argv[3]) == "-screenshot")
+    {
+        std::string outputPath;
+
+        if (argc == 6 &&
+            std::string(argv[4]) == "-out")
+        {
+            outputPath = argv[5];
+        }
+        else if (argc != 4)
+        {
+            PrintUsage();
+            return 2;
+        }
+
+        return CaptureBmpDisplay(
+            argv[2],
+            outputPath);
     }
 
     if (argc >= 4 &&

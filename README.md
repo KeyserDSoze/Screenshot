@@ -198,9 +198,10 @@ The user-mode capture path is complete for the current one-frame scope:
 3. `-vendor-pipeline` adds Intel IGCL and NVIDIA NVAPI diagnostics when those vendor runtimes are installed.
 4. Automatic capture selects active CCD/VidPN display owners first, then keeps a compatibility fallback across remaining adapters.
 5. Desktop Duplication remains the primary capture backend; exact-monitor Windows Graphics Capture is used only as the final hybrid fallback.
-6. The public DLL and CLI both support automatic capture, and the release workflow publishes versioned and `latest` x64 packages from `main`.
+6. The public DLL and CLI support both automatic owner-first capture and exact active-display capture by GDI name.
+7. The release workflow publishes versioned and `latest` x64 packages from `main`.
 
-Explicit output selection, repeated/high-rate capture, cursor composition and advanced rotation/HDR conversion are outside the finalized one-frame API and can be added later without changing the automatic owner-selection contract.
+Repeated/high-rate capture, cursor composition and advanced rotation/HDR conversion remain outside the current one-frame API and can be added later without changing the automatic owner-selection contract.
 
 The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-driver-samples license is copied under `THIRD_PARTY_LICENSES`.
 
@@ -219,6 +220,17 @@ KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 `-screenshot` with no `-device` is equivalent to `-device auto`. Auto mode queries the active Windows CCD/VidPN topology first, maps each active source adapter LUID back to the enumerated WDDM devices, and tries those active display owners before any remaining adapter fallback. This makes hybrid Intel/NVIDIA capture deterministic when DXGI enumeration disagrees with the physical display owner. Explicit `-device N` remains available for diagnostics and vendor-specific testing.
 
 The DLL exposes the same behavior through `KS_CaptureBmpAuto`.
+
+### Exact display capture
+
+Multi-monitor callers can now select one active Windows display explicitly by its GDI name from `-pipeline`:
+
+```bat
+KernelScreenshotCli.exe -display DISPLAY1 -screenshot -out display1.bmp
+KernelScreenshotCli.exe -display DISPLAY5 -screenshot -out display5.bmp
+```
+
+The short form `DISPLAYn` and the full `\\.\DISPLAYn` form are both accepted. The selected CCD/VidPN path determines the real owning adapter LUID. The engine then tries Desktop Duplication on that exact DXGI output; if the hybrid stack does not expose that output through DDA, it falls back only for that exact `HMONITOR` through Windows Graphics Capture. The DLL equivalent is `KS_CaptureDisplayBmp`.
 
 ### Hybrid capture ownership
 

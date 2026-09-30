@@ -31,6 +31,7 @@ namespace
     thread_local std::vector<uint8_t> g_PendingBmp;
     thread_local uint32_t g_PendingBmpDeviceIndex = 0;
     thread_local bool g_PendingBmpAuto = false;
+    thread_local std::string g_PendingBmpDisplayName;
     thread_local bool g_HasPendingBmp = false;
 
 
@@ -333,6 +334,69 @@ namespace
 
         result.resize(static_cast<size_t>(written - 1));
         return result;
+    }
+
+
+    std::wstring Utf8ToWide(const char* value)
+    {
+        if (value == nullptr || *value == '\0')
+            return {};
+
+        const int required =
+            MultiByteToWideChar(
+                CP_UTF8,
+                MB_ERR_INVALID_CHARS,
+                value,
+                -1,
+                nullptr,
+                0);
+
+        if (required <= 1)
+            return {};
+
+        std::wstring result(
+            static_cast<size_t>(required),
+            L'\0');
+
+        const int written =
+            MultiByteToWideChar(
+                CP_UTF8,
+                MB_ERR_INVALID_CHARS,
+                value,
+                -1,
+                result.data(),
+                required);
+
+        if (written <= 1)
+            return {};
+
+        result.resize(
+            static_cast<size_t>(written - 1));
+
+        return result;
+    }
+
+    std::wstring NormalizeGdiDisplayName(
+        const char* displayName)
+    {
+        std::wstring value =
+            Utf8ToWide(displayName);
+
+        if (value.empty())
+            return {};
+
+        if (value.rfind(L"\\\\.\\", 0) == 0)
+            return value;
+
+        if (_wcsnicmp(
+                value.c_str(),
+                L"DISPLAY",
+                7) == 0)
+        {
+            return L"\\\\.\\" + value;
+        }
+
+        return value;
     }
 
     std::string JsonEscape(const std::string& value)
@@ -2660,6 +2724,364 @@ namespace
         }
     }
 
+
+    int CaptureExactDxgiDisplay(
+        const LUID& adapterLuid,
+        const wchar_t* displayName,
+        std::vector<uint8_t>& bmpBytes,
+        std::string& errorText)
+    {
+        if (displayName == nullptr ||
+            *displayName == L'\0')
+        {
+            errorText =
+                "Exact display capture received an empty display name.";
+            return KS_INVALID_ARGUMENT;
+        }
+
+        ComPtr<IDXGIFactory1> factory;
+        HRESULT hr =
+            CreateDXGIFactory1(
+                IID_PPV_ARGS(
+                    factory.GetAddressOf()));
+
+        if (FAILED(hr))
+        {
+            errorText =
+                "CreateDXGIFactory1 failed: " +
+                HResultText(hr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        ComPtr<IDXGIAdapter1> adapter =
+            FindDxgiAdapter(
+                factory.Get(),
+                adapterLuid);
+
+        if (adapter == nullptr)
+        {
+            errorText =
+                "No DXGI adapter matched the active CCD owner LUID.";
+            return KS_CAPTURE_FAILED;
+        }
+
+        ComPtr<ID3D11Device> device;
+        ComPtr<ID3D11DeviceContext> context;
+        D3D_FEATURE_LEVEL featureLevel =
+            D3D_FEATURE_LEVEL_9_1;
+
+        hr =
+            D3D11CreateDevice(
+                adapter.Get(),
+                D3D_DRIVER_TYPE_UNKNOWN,
+                nullptr,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                nullptr,
+                0,
+                D3D11_SDK_VERSION,
+                device.GetAddressOf(),
+                &featureLevel,
+                context.GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            errorText =
+                "D3D11CreateDevice for exact display failed: " +
+                HResultText(hr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        ComPtr<IDXGIOutputDuplication> duplication;
+        HRESULT duplicate1Hr = S_OK;
+        HRESULT duplicateHr = S_OK;
+        bool matchedOutput = false;
+
+        for (UINT outputIndex = 0;; ++outputIndex)
+        {
+            ComPtr<IDXGIOutput> output;
+            hr =
+                adapter->EnumOutputs(
+                    outputIndex,
+                    output.GetAddressOf());
+
+            if (hr == DXGI_ERROR_NOT_FOUND)
+                break;
+
+            if (FAILED(hr))
+                break;
+
+            DXGI_OUTPUT_DESC desc = {};
+            if (FAILED(output->GetDesc(&desc)))
+                continue;
+
+            if (_wcsicmp(
+                    desc.DeviceName,
+                    displayName) != 0)
+            {
+                continue;
+            }
+
+            matchedOutput = true;
+
+            if (!desc.AttachedToDesktop)
+            {
+                errorText =
+                    "The requested DXGI output exists but is not attached to the desktop.";
+                return KS_CAPTURE_FAILED;
+            }
+
+            ComPtr<IDXGIOutputDuplication> candidate;
+
+            ComPtr<IDXGIOutput5> output5;
+            if (SUCCEEDED(output.As(&output5)))
+            {
+                const DXGI_FORMAT supportedFormats[] =
+                {
+                    DXGI_FORMAT_B8G8R8A8_UNORM
+                };
+
+                duplicate1Hr =
+                    output5->DuplicateOutput1(
+                        device.Get(),
+                        0,
+                        static_cast<UINT>(
+                            ARRAYSIZE(
+                                supportedFormats)),
+                        supportedFormats,
+                        candidate.GetAddressOf());
+
+                if (SUCCEEDED(duplicate1Hr))
+                {
+                    duplication = candidate;
+                    break;
+                }
+            }
+
+            ComPtr<IDXGIOutput1> output1;
+            if (SUCCEEDED(output.As(&output1)))
+            {
+                candidate.Reset();
+
+                duplicateHr =
+                    output1->DuplicateOutput(
+                        device.Get(),
+                        candidate.GetAddressOf());
+
+                if (SUCCEEDED(duplicateHr))
+                {
+                    duplication = candidate;
+                    break;
+                }
+            }
+
+            break;
+        }
+
+        if (duplication == nullptr)
+        {
+            std::ostringstream error;
+
+            if (!matchedOutput)
+            {
+                error
+                    << "The CCD owner adapter did not expose "
+                    << WideToUtf8(displayName)
+                    << " through DXGI.";
+            }
+            else
+            {
+                error
+                    << "Desktop Duplication could not open "
+                    << WideToUtf8(displayName)
+                    << ".";
+
+                if (FAILED(duplicate1Hr))
+                {
+                    error
+                        << " DuplicateOutput1="
+                        << HResultText(duplicate1Hr)
+                        << ".";
+                }
+
+                if (FAILED(duplicateHr))
+                {
+                    error
+                        << " DuplicateOutput="
+                        << HResultText(duplicateHr)
+                        << ".";
+                }
+            }
+
+            errorText = error.str();
+            return KS_CAPTURE_FAILED;
+        }
+
+        DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
+        ComPtr<IDXGIResource> desktopResource;
+        bool acquiredDesktopPresent = false;
+
+        for (int attempt = 0;
+             attempt < 10;
+             ++attempt)
+        {
+            frameInfo = {};
+            desktopResource.Reset();
+
+            hr =
+                duplication->AcquireNextFrame(
+                    1000,
+                    &frameInfo,
+                    desktopResource.GetAddressOf());
+
+            if (hr == DXGI_ERROR_WAIT_TIMEOUT)
+                continue;
+
+            if (FAILED(hr))
+                break;
+
+            const bool hasDesktopPresent =
+                frameInfo.LastPresentTime.QuadPart != 0 ||
+                frameInfo.AccumulatedFrames != 0;
+
+            if (hasDesktopPresent)
+            {
+                acquiredDesktopPresent = true;
+                break;
+            }
+
+            duplication->ReleaseFrame();
+        }
+
+        if (FAILED(hr))
+        {
+            errorText =
+                "AcquireNextFrame for exact display failed: " +
+                HResultText(hr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        if (!acquiredDesktopPresent)
+        {
+            errorText =
+                "AcquireNextFrame returned no desktop-present frame for the requested display.";
+            return KS_CAPTURE_FAILED;
+        }
+
+        FrameGuard frameGuard{
+            duplication.Get(),
+            true
+        };
+
+        ComPtr<ID3D11Texture2D> desktopTexture;
+        hr =
+            desktopResource.As(
+                &desktopTexture);
+
+        if (FAILED(hr))
+        {
+            errorText =
+                "Exact display desktop resource is not an ID3D11Texture2D: " +
+                HResultText(hr);
+            return KS_CAPTURE_FAILED;
+        }
+
+        return TextureToBmp(
+            device.Get(),
+            context.Get(),
+            desktopTexture.Get(),
+            bmpBytes,
+            errorText);
+    }
+
+    int BuildBmpBytesForDisplay(
+        const char* displayName,
+        std::vector<uint8_t>& bmpBytes)
+    {
+        const std::wstring normalizedName =
+            NormalizeGdiDisplayName(
+                displayName);
+
+        if (normalizedName.empty())
+        {
+            SetError(
+                "Display name is empty or invalid UTF-8.");
+            return KS_INVALID_ARGUMENT;
+        }
+
+        std::vector<ActiveDisplayPath> activePaths;
+        if (!GetActiveDisplayPaths(activePaths))
+        {
+            SetError(
+                "Could not query the active CCD display topology.");
+            return KS_ENUMERATION_FAILED;
+        }
+
+        const ActiveDisplayPath* selectedPath =
+            nullptr;
+
+        for (const ActiveDisplayPath& path :
+             activePaths)
+        {
+            if (_wcsicmp(
+                    path.GdiDeviceName.c_str(),
+                    normalizedName.c_str()) == 0)
+            {
+                selectedPath = &path;
+                break;
+            }
+        }
+
+        if (selectedPath == nullptr)
+        {
+            SetError(
+                "Requested display is not an active CCD/VidPN path: " +
+                WideToUtf8(
+                    normalizedName.c_str()));
+            return KS_DEVICE_NOT_FOUND;
+        }
+
+        std::string ddaError;
+        int status =
+            CaptureExactDxgiDisplay(
+                selectedPath->AdapterLuid,
+                selectedPath->GdiDeviceName.c_str(),
+                bmpBytes,
+                ddaError);
+
+        if (status == KS_OK)
+            return KS_OK;
+
+        if (selectedPath->Monitor == nullptr)
+        {
+            SetError(
+                "Exact display capture failed. DDA: " +
+                ddaError +
+                " Windows Graphics Capture: no HMONITOR could be resolved.");
+            return KS_CAPTURE_FAILED;
+        }
+
+        std::string wgcError;
+        status =
+            CaptureMonitorWithWindowsGraphicsCapture(
+                selectedPath->Monitor,
+                bmpBytes,
+                wgcError);
+
+        if (status == KS_OK)
+            return KS_OK;
+
+        SetError(
+            "Exact display capture failed for " +
+            WideToUtf8(
+                selectedPath->GdiDeviceName.c_str()) +
+            ". DDA: " +
+            ddaError +
+            " Windows Graphics Capture: " +
+            wgcError);
+
+        return KS_CAPTURE_FAILED;
+    }
+
     int BuildBmpBytes(
         uint32_t deviceIndex,
         std::vector<uint8_t>& bmpBytes)
@@ -3400,6 +3822,7 @@ KS_API int KS_CALL KS_CaptureBmp(
     if (buffer == nullptr)
     {
         g_PendingBmp.clear();
+        g_PendingBmpDisplayName.clear();
         g_HasPendingBmp = false;
 
         const int status =
@@ -3472,6 +3895,7 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
     if (buffer == nullptr)
     {
         g_PendingBmp.clear();
+        g_PendingBmpDisplayName.clear();
         g_HasPendingBmp = false;
 
         const int status =
@@ -3510,6 +3934,7 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
         {
             g_PendingBmp.clear();
             g_PendingBmpAuto = false;
+            g_PendingBmpDisplayName.clear();
             g_HasPendingBmp = false;
         }
 
@@ -3519,6 +3944,113 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
     std::vector<uint8_t> bmpBytes;
     const int status =
         BuildBmpBytesAuto(bmpBytes);
+
+    if (status != KS_OK)
+        return status;
+
+    return CopyBinaryResult(
+        bmpBytes,
+        buffer,
+        bufferBytes);
+}
+
+
+KS_API int KS_CALL KS_CaptureDisplayBmp(
+    const char* displayName,
+    uint8_t* buffer,
+    uint32_t* bufferBytes)
+{
+    g_LastError.clear();
+
+    if (displayName == nullptr ||
+        *displayName == '\0')
+    {
+        SetError("displayName is null or empty.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    if (bufferBytes == nullptr)
+    {
+        SetError("bufferBytes is null.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    const std::wstring normalizedName =
+        NormalizeGdiDisplayName(displayName);
+
+    if (normalizedName.empty())
+    {
+        SetError(
+            "Display name is empty or invalid UTF-8.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    const std::string normalizedUtf8 =
+        WideToUtf8(
+            normalizedName.c_str());
+
+    if (buffer == nullptr)
+    {
+        g_PendingBmp.clear();
+        g_PendingBmpAuto = false;
+        g_PendingBmpDisplayName.clear();
+        g_HasPendingBmp = false;
+
+        const int status =
+            BuildBmpBytesForDisplay(
+                normalizedUtf8.c_str(),
+                g_PendingBmp);
+
+        if (status != KS_OK)
+            return status;
+
+        if (g_PendingBmp.size() > UINT32_MAX)
+        {
+            g_PendingBmp.clear();
+            SetError("Captured BMP is too large.");
+            return KS_CAPTURE_FAILED;
+        }
+
+        g_PendingBmpDeviceIndex = UINT32_MAX;
+        g_PendingBmpDisplayName =
+            normalizedUtf8;
+        g_HasPendingBmp = true;
+
+        *bufferBytes =
+            static_cast<uint32_t>(
+                g_PendingBmp.size());
+
+        return KS_OK;
+    }
+
+    if (g_HasPendingBmp &&
+        !g_PendingBmpAuto &&
+        g_PendingBmpDeviceIndex == UINT32_MAX &&
+        _stricmp(
+            g_PendingBmpDisplayName.c_str(),
+            normalizedUtf8.c_str()) == 0)
+    {
+        const int status =
+            CopyBinaryResult(
+                g_PendingBmp,
+                buffer,
+                bufferBytes);
+
+        if (status == KS_OK)
+        {
+            g_PendingBmp.clear();
+            g_PendingBmpDisplayName.clear();
+            g_HasPendingBmp = false;
+        }
+
+        return status;
+    }
+
+    std::vector<uint8_t> bmpBytes;
+    const int status =
+        BuildBmpBytesForDisplay(
+            normalizedUtf8.c_str(),
+            bmpBytes);
 
     if (status != KS_OK)
         return status;

@@ -197,7 +197,22 @@ KernelScreenshotCli.exe -device 0 -screenshot
 
 A numeric device is treated as the preferred adapter; if it cannot capture, the CLI keeps its previous fault-tolerant behavior and tries the other enumerated adapters before failing.
 
-For multi-monitor applications that need a specific physical desktop region, explicit output selection is still outside the current CLI contract. Automatic mode returns the first successful one-frame capture from the active owner ordering.
+For multi-monitor applications that need a specific active monitor, use `-display DISPLAYn`. Automatic mode still returns the first successful one-frame capture from the active owner ordering.
+
+## Capture one exact display
+
+Use the GDI source name reported by `-pipeline` when a multi-monitor caller needs one specific active display:
+
+```bat
+KernelScreenshotCli.exe -display DISPLAY1 -screenshot
+KernelScreenshotCli.exe -display DISPLAY5 -screenshot -out hdmi.bmp
+```
+
+Both `DISPLAYn` and the full `\\.\DISPLAYn` spelling are accepted. The requested name must correspond to an active CCD/VidPN path.
+
+The engine resolves the selected path's adapter LUID from CCD, attempts Desktop Duplication only on that exact DXGI output, and uses monitor-scoped Windows Graphics Capture only if DDA cannot expose/capture that same display. It does not silently switch to a different monitor.
+
+This is the preferred command when the machine has multiple active displays and the caller needs deterministic monitor selection.
 
 ## Capture screenshot to stdout
 

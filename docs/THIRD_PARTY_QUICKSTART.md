@@ -35,6 +35,7 @@ Then the C# application can launch `KernelScreenshotCli.exe` by filename only. N
 -list
 -pipeline
 -vendor-pipeline
+-display <DISPLAYn> -screenshot
 -device <index|auto> -screenshot
 ```
 
@@ -128,6 +129,23 @@ KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 ```
 
 The process exit code must still be checked.
+
+## 5. Capture a specific display
+
+When multiple displays are active, first inspect the active paths:
+
+```bat
+KernelScreenshotCli.exe -pipeline
+```
+
+Then capture the GDI source you want:
+
+```bat
+KernelScreenshotCli.exe -display DISPLAY1 -screenshot -out internal.bmp
+KernelScreenshotCli.exe -display DISPLAY5 -screenshot -out external.bmp
+```
+
+The exact-display path is owner-aware: CCD/VidPN selects the adapter, DDA is attempted for that display, and WGC is used only as a fallback for the same monitor.
 
 ## Important: avoid stdout pipe deadlocks in C#
 
@@ -377,7 +395,7 @@ The DLL API exposes automatic capture directly:
 KS_CaptureBmpAuto
 ```
 
-and also exposes `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
+and also exposes `KS_CaptureDisplayBmp` for one exact active monitor, `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
 
 See:
 
