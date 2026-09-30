@@ -408,9 +408,8 @@ namespace
             tryDevice(preferredDeviceIndex, preferredExists);
 
         if (status == KS_OK ||
-            status == 20 ||
-            status == 21 ||
-            status == 22)
+            (status >= 20 &&
+             status <= 25))
         {
             return status;
         }

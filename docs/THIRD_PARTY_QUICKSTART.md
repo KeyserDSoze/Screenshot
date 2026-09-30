@@ -9,6 +9,7 @@ KernelScreenshotCli.exe
 KernelScreenshot.dll
 KernelScreenshotApi.h
 THIRD_PARTY_QUICKSTART.md
+CLI_GUIDE.md
 EXE_API.md
 DLL_API.md
 ```
