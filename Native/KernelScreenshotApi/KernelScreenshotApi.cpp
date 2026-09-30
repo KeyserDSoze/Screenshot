@@ -31,6 +31,7 @@ namespace
     thread_local std::vector<uint8_t> g_PendingBmp;
     thread_local uint32_t g_PendingBmpDeviceIndex = 0;
     thread_local bool g_PendingBmpAuto = false;
+    thread_local bool g_PendingBmpStrict = false;
     thread_local std::string g_PendingBmpDisplayName;
     thread_local bool g_HasPendingBmp = false;
 
@@ -43,6 +44,7 @@ namespace
         uint32_t RequestedDeviceIndex = 0;
         std::string RequestedDisplayName;
         std::string AutoCandidateKind;
+        bool StrictAdapter = false;
 
         bool HasAttemptedDeviceIndex = false;
         uint32_t AttemptedDeviceIndex = 0;
@@ -1071,6 +1073,10 @@ namespace
         }
 
         json
+            << ",\"strictAdapter\":"
+            << (report.StrictAdapter
+                ? "true"
+                : "false")
             << "}"
             << ",\"result\":{"
             << "\"attemptedDeviceIndex\":";
@@ -3455,7 +3461,8 @@ namespace
 
     int BuildBmpBytes(
         uint32_t deviceIndex,
-        std::vector<uint8_t>& bmpBytes)
+        std::vector<uint8_t>& bmpBytes,
+        bool strictAdapter)
     {
         std::vector<DeviceInfo> devices;
         const int enumerateStatus = EnumerateDevices(devices);
@@ -3611,7 +3618,8 @@ namespace
             // KMT adapter before leaving DDA.
             LUID kmtLuid = {};
             D3DDDI_VIDEO_PRESENT_SOURCE_ID kmtSourceId = 0;
-            if (MapGdiDisplayToKmtAdapter(
+            if (!strictAdapter &&
+                MapGdiDisplayToKmtAdapter(
                     desc.DeviceName,
                     kmtLuid,
                     kmtSourceId) &&
@@ -3741,6 +3749,9 @@ namespace
             // hybrid systems even though DXGI reports an attached output.
             // Keep DDA as the primary backend, and use Windows Graphics
             // Capture only after the KMT ownership retry also fails.
+            if (strictAdapter)
+                continue;
+
             std::vector<uint8_t> fallbackBmp;
             std::string fallbackError;
             const int fallbackStatus =
@@ -3767,7 +3778,8 @@ namespace
         }
 
 
-        if (duplication == nullptr)
+        if (duplication == nullptr &&
+            !strictAdapter)
         {
             // DXGI output enumeration can disagree with the active VidPN/CCD
             // ownership on hybrid laptops. Use the active CCD source LUID as
@@ -3836,7 +3848,9 @@ namespace
                 << ", adapter=\"" << selectedDevice.Name << "\""
                 << ", enumeratedOutputs=" << enumeratedOutputCount
                 << ", attachedOutputs=" << attachedOutputCount
-                << ", activeCcdPaths=" << activeCcdPathCount;
+                << ", activeCcdPaths=" << activeCcdPathCount
+                << ", strictAdapter="
+                << (strictAdapter ? "true" : "false");
 
             if (!lastDuplicateOutputName.empty())
             {
@@ -4053,7 +4067,8 @@ namespace
             const int status =
                 BuildBmpBytes(
                     deviceIndex,
-                    bmpBytes);
+                    bmpBytes,
+                    false);
 
             if (status == KS_OK)
             {
@@ -4275,7 +4290,10 @@ KS_API int KS_CALL KS_CaptureBmp(
         g_HasPendingBmp = false;
 
         const int status =
-            BuildBmpBytes(deviceIndex, g_PendingBmp);
+            BuildBmpBytes(
+                deviceIndex,
+                g_PendingBmp,
+                false);
 
         if (status != KS_OK)
             return status;
@@ -4296,6 +4314,7 @@ KS_API int KS_CALL KS_CaptureBmp(
 
         g_PendingBmpDeviceIndex = deviceIndex;
         g_PendingBmpAuto = false;
+        g_PendingBmpStrict = false;
         g_HasPendingBmp = true;
         *bufferBytes = static_cast<uint32_t>(g_PendingBmp.size());
         return KS_OK;
@@ -4303,6 +4322,7 @@ KS_API int KS_CALL KS_CaptureBmp(
 
     if (g_HasPendingBmp &&
         !g_PendingBmpAuto &&
+        !g_PendingBmpStrict &&
         g_PendingBmpDeviceIndex == deviceIndex)
     {
         const int status =
@@ -4314,6 +4334,7 @@ KS_API int KS_CALL KS_CaptureBmp(
         if (status == KS_OK)
         {
             g_PendingBmp.clear();
+            g_PendingBmpStrict = false;
             g_HasPendingBmp = false;
         }
 
@@ -4326,7 +4347,10 @@ KS_API int KS_CALL KS_CaptureBmp(
 
     std::vector<uint8_t> bmpBytes;
     const int status =
-        BuildBmpBytes(deviceIndex, bmpBytes);
+        BuildBmpBytes(
+            deviceIndex,
+            bmpBytes,
+            false);
 
     if (status != KS_OK)
         return status;
@@ -4337,6 +4361,112 @@ KS_API int KS_CALL KS_CaptureBmp(
         true;
     g_LastCaptureReport.RequestedDeviceIndex =
         deviceIndex;
+
+    return CopyBinaryResult(
+        bmpBytes,
+        buffer,
+        bufferBytes);
+}
+
+
+
+KS_API int KS_CALL KS_CaptureBmpStrict(
+    uint32_t deviceIndex,
+    uint8_t* buffer,
+    uint32_t* bufferBytes)
+{
+    g_LastError.clear();
+
+    if (bufferBytes == nullptr)
+    {
+        SetError("bufferBytes is null.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    if (buffer == nullptr)
+    {
+        ResetCaptureReport();
+        g_PendingBmp.clear();
+        g_PendingBmpDisplayName.clear();
+        g_HasPendingBmp = false;
+
+        const int status =
+            BuildBmpBytes(
+                deviceIndex,
+                g_PendingBmp,
+                true);
+
+        if (status != KS_OK)
+            return status;
+
+        g_LastCaptureReport.RequestMode =
+            "device";
+        g_LastCaptureReport.HasRequestedDeviceIndex =
+            true;
+        g_LastCaptureReport.RequestedDeviceIndex =
+            deviceIndex;
+        g_LastCaptureReport.StrictAdapter =
+            true;
+
+        if (g_PendingBmp.size() > UINT32_MAX)
+        {
+            g_PendingBmp.clear();
+            SetError("Captured BMP is too large.");
+            return KS_CAPTURE_FAILED;
+        }
+
+        g_PendingBmpDeviceIndex = deviceIndex;
+        g_PendingBmpAuto = false;
+        g_PendingBmpStrict = true;
+        g_HasPendingBmp = true;
+        *bufferBytes =
+            static_cast<uint32_t>(
+                g_PendingBmp.size());
+
+        return KS_OK;
+    }
+
+    if (g_HasPendingBmp &&
+        !g_PendingBmpAuto &&
+        g_PendingBmpStrict &&
+        g_PendingBmpDeviceIndex == deviceIndex)
+    {
+        const int status =
+            CopyBinaryResult(
+                g_PendingBmp,
+                buffer,
+                bufferBytes);
+
+        if (status == KS_OK)
+        {
+            g_PendingBmp.clear();
+            g_PendingBmpStrict = false;
+            g_HasPendingBmp = false;
+        }
+
+        return status;
+    }
+
+    ResetCaptureReport();
+
+    std::vector<uint8_t> bmpBytes;
+    const int status =
+        BuildBmpBytes(
+            deviceIndex,
+            bmpBytes,
+            true);
+
+    if (status != KS_OK)
+        return status;
+
+    g_LastCaptureReport.RequestMode =
+        "device";
+    g_LastCaptureReport.HasRequestedDeviceIndex =
+        true;
+    g_LastCaptureReport.RequestedDeviceIndex =
+        deviceIndex;
+    g_LastCaptureReport.StrictAdapter =
+        true;
 
     return CopyBinaryResult(
         bmpBytes,
@@ -4382,6 +4512,7 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
 
         g_PendingBmpDeviceIndex = UINT32_MAX;
         g_PendingBmpAuto = true;
+        g_PendingBmpStrict = false;
         g_HasPendingBmp = true;
         *bufferBytes =
             static_cast<uint32_t>(
@@ -4403,6 +4534,7 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
         {
             g_PendingBmp.clear();
             g_PendingBmpAuto = false;
+            g_PendingBmpStrict = false;
             g_PendingBmpDisplayName.clear();
             g_HasPendingBmp = false;
         }
@@ -4505,6 +4637,7 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
 
     if (g_HasPendingBmp &&
         !g_PendingBmpAuto &&
+        !g_PendingBmpStrict &&
         g_PendingBmpDeviceIndex == UINT32_MAX &&
         _stricmp(
             g_PendingBmpDisplayName.c_str(),

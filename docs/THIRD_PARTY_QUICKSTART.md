@@ -38,6 +38,7 @@ Then the C# application can launch `KernelScreenshotCli.exe` by filename only. N
 -vendor-pipeline
 -display <DISPLAYn> -screenshot
 -device <index|auto> -screenshot
+-device <index> -screenshot -strict
 -report <file.json> (optional on screenshot commands)
 ```
 
@@ -95,6 +96,16 @@ KernelScreenshotCli.exe -device 0 -screenshot
 ```
 
 A numeric index is treated as a preferred adapter; if it fails, the CLI retains its fault-tolerant fallback to other enumerated adapters.
+
+### Strict numeric device
+
+Numeric `-device N` normally means "try this adapter first, then fall back if necessary." For diagnostics or integrations that require a hard adapter lock, add `-strict`:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot -strict
+```
+
+Strict mode uses only Desktop Duplication on that selected adapter. It does not try another adapter, does not switch to another KMT owner, and does not use WGC. If the adapter cannot capture, the command fails. `-strict` can be combined with byte-stream output, `-out`, and `-report`.
 
 ### Bytes are the native CLI integration mode
 
@@ -424,7 +435,7 @@ The DLL API exposes automatic capture directly:
 KS_CaptureBmpAuto
 ```
 
-and also exposes `KS_CaptureDisplayBmp` for one exact active monitor, `KS_GetLastCaptureReportJson` for the most recent successful capture, `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
+and also exposes `KS_CaptureDisplayBmp` for one exact active monitor, `KS_CaptureBmpStrict` for hard adapter-only Desktop Duplication, `KS_GetLastCaptureReportJson` for the most recent successful capture, `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
 
 See:
 

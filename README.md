@@ -83,6 +83,7 @@ The project now also builds `KernelScreenshot.dll`, a native x64 C ABI. The prim
 KS_CaptureBmpAuto
 KS_CaptureDisplayBmp
 KS_CaptureBmp
+KS_CaptureBmpStrict
 KS_GetLastCaptureReportJson
 ```
 
@@ -252,9 +253,22 @@ Any screenshot command can optionally write a JSON sidecar describing the path t
 KernelScreenshotCli.exe -screenshot -out screenshot.bmp -report capture.json
 ```
 
-The report includes request mode (`auto`, `display`, or `device`), the actual adapter LUID/name, GDI display, VidPN source/target IDs, backend (`DuplicateOutput1`, `DuplicateOutput`, or `WindowsGraphicsCapture`), route, dimensions and BMP byte count. The DLL equivalent is `KS_GetLastCaptureReportJson`.
+The report includes request mode (`auto`, `display`, or `device`), the actual adapter LUID/name, GDI display, VidPN source/target IDs, strict-adapter flag, backend (`DuplicateOutput1`, `DuplicateOutput`, or `WindowsGraphicsCapture`), route, dimensions and BMP byte count. The DLL equivalent is `KS_GetLastCaptureReportJson`.
 
 For an end-user command guide, see `docs/CLI_GUIDE.md`.
+
+### Strict adapter mode
+
+Numeric `-device N` remains a **preferred adapter** by default: if that choice cannot capture, the CLI may try other adapters for compatibility. Add `-strict` when the selected adapter must be the only capture adapter:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot -strict
+KernelScreenshotCli.exe -device 1 -screenshot -strict -out strict.bmp -report strict.json
+```
+
+Strict mode does not try other device indexes, does not perform a cross-adapter KMT ownership retry, and does not use the Windows Graphics Capture fallback. It succeeds only through Desktop Duplication (`DuplicateOutput1` or `DuplicateOutput`) on the selected adapter; otherwise it fails. `-strict` is valid only with a numeric `-device <index>`, not with `auto` or `-display`.
+
+The DLL equivalent is `KS_CaptureBmpStrict`.
 
 ### Exact display capture
 

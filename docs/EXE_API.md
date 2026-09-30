@@ -211,7 +211,7 @@ KernelScreenshotCli.exe -device auto -screenshot -out screenshot.bmp -report cap
 
 `-out` and `-report` may be given in either order. `-report` never writes JSON to stdout, so it is safe to use when stdout is carrying binary BMP bytes.
 
-The JSON describes the successful capture route. It includes the request mode, auto candidate classification, actual adapter LUID/name, GDI display name, VidPN source/target IDs, backend, route, width, height and BMP byte count.
+The JSON describes the successful capture route. It includes the request mode, strict-adapter flag, auto candidate classification, actual adapter LUID/name, GDI display name, VidPN source/target IDs, backend, route, width, height and BMP byte count.
 
 Backend values currently include `DuplicateOutput1`, `DuplicateOutput`, and `WindowsGraphicsCapture`. Route values distinguish direct DXGI capture from KMT ownership retry and monitor-scoped fallback paths.
 
@@ -229,6 +229,22 @@ Both `DISPLAYn` and the full `\\.\DISPLAYn` spelling are accepted. The requested
 The engine resolves the selected path's adapter LUID from CCD, attempts Desktop Duplication only on that exact DXGI output, and uses monitor-scoped Windows Graphics Capture only if DDA cannot expose/capture that same display. It does not silently switch to a different monitor.
 
 This is the preferred command when the machine has multiple active displays and the caller needs deterministic monitor selection.
+
+## Strict adapter selection
+
+By default, numeric `-device N` means **preferred adapter**. The CLI tries that index first and may try other adapters if the preferred one cannot capture.
+
+Use `-strict` to disable every cross-adapter / non-DDA fallback:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot -strict
+KernelScreenshotCli.exe -device 0 -screenshot -strict -out strict.bmp
+KernelScreenshotCli.exe -device 0 -screenshot -strict -report strict.json
+```
+
+In strict mode the selected adapter is the only permitted adapter. The engine may use `DuplicateOutput1` or `DuplicateOutput` on that adapter, but it will not try another device index, will not retry a different KMT owner, and will not use Windows Graphics Capture. If the selected adapter cannot provide Desktop Duplication, the command fails with a non-zero exit code.
+
+`-strict` is valid only with numeric `-device <index>`. It is rejected with `-device auto`, plain `-screenshot`, and `-display DISPLAYn`.
 
 ## Binary screenshot contract
 

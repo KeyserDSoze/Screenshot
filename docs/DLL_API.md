@@ -24,6 +24,11 @@ int __cdecl KS_CaptureBmp(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
+int __cdecl KS_CaptureBmpStrict(
+    uint32_t deviceIndex,
+    uint8_t* buffer,
+    uint32_t* bufferBytes);
+
 int __cdecl KS_CaptureBmpAuto(
     uint8_t* buffer,
     uint32_t* bufferBytes);
@@ -155,6 +160,20 @@ status = KS_CaptureDisplayBmp("DISPLAY1", bmp, &bytes);
 
 The same two-call cached-frame contract used by `KS_CaptureBmpAuto` applies here.
 
+### Strict adapter selection
+
+`KS_CaptureBmpStrict(deviceIndex, ...)` is the hard-lock version of explicit adapter capture. It uses only Desktop Duplication on the selected adapter. It does not perform a cross-adapter KMT ownership retry and does not fall back to Windows Graphics Capture.
+
+```c
+uint32_t bytes = 0;
+int status = KS_CaptureBmpStrict(0, NULL, &bytes);
+
+uint8_t* bmp = malloc(bytes);
+status = KS_CaptureBmpStrict(0, bmp, &bytes);
+```
+
+Use this API when the caller needs to verify that one specific WDDM adapter itself can provide the duplicated frame. If it cannot, the call fails rather than changing adapter/backend.
+
 ### Explicit adapter selection
 
 `KS_CaptureBmp(deviceIndex, ...)` keeps explicit adapter selection for diagnostics and integrations that already choose a WDDM device. It resolves the selected D3DKMT adapter, matches its LUID to DXGI, attempts Desktop Duplication, applies the D3DKMT ownership retry, and uses the CCD-resolved monitor fallback when needed.
@@ -179,7 +198,7 @@ char* report = malloc(reportBytes);
 status = KS_GetLastCaptureReportJson(report, &reportBytes);
 ```
 
-The JSON records the request mode, selected/attempted adapter information, actual display owner LUID, GDI display name, VidPN source/target IDs, backend, capture route and output dimensions. A new capture request clears the previous report before it begins, so a failed new capture does not leave an apparently current report behind.
+The JSON records the request mode, strict-adapter flag, selected/attempted adapter information, actual display owner LUID, GDI display name, VidPN source/target IDs, backend, capture route and output dimensions. A new capture request clears the previous report before it begins, so a failed new capture does not leave an apparently current report behind.
 
 ## DLL location for third-party applications
 

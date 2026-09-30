@@ -40,6 +40,14 @@ KS_API int KS_CALL KS_CaptureBmp(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
+// Strict adapter capture. Uses only the selected adapter's Desktop
+// Duplication path. It does not retry another adapter and does not fall back
+// to Windows Graphics Capture. Fails if that adapter cannot provide the frame.
+KS_API int KS_CALL KS_CaptureBmpStrict(
+    uint32_t deviceIndex,
+    uint8_t* buffer,
+    uint32_t* bufferBytes);
+
 // Automatically selects an active display owner from the Windows CCD/VidPN
 // topology, preferring active owners before any remaining adapter fallback.
 // Returns a complete 32-bit BMP file in memory.

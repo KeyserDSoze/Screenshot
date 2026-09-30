@@ -138,6 +138,7 @@ Example report shape:
 | Field | Meaning |
 | --- | --- |
 | `request.mode` | `auto`, `display`, or `device` |
+| `request.strictAdapter` | `true` when the capture was requested through strict numeric-device mode |
 | `autoCandidateKind` | whether auto succeeded on an active CCD owner or on a compatibility fallback adapter |
 | `adapter.name` / LUID | GPU that actually owns the captured display path |
 | `gdiDeviceName` | Windows display source such as `\\.\DISPLAY1` |
@@ -172,6 +173,47 @@ Both `DISPLAY1` and `\\.\DISPLAY1` are accepted.
 
 Exact-display mode never silently switches to another monitor. CCD/VidPN identifies the owner for that display, Desktop Duplication is tried on that exact output, and WGC can only fall back to the same `HMONITOR`.
 
+## Preferred device vs strict device
+
+A numeric device without `-strict` is a **preference**, not a hard lock:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot
+```
+
+The CLI tries device 0 first, but may fall back to another adapter if needed.
+
+To require only that adapter:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot -strict
+```
+
+Strict mode means:
+
+```text
+selected device only
+  -> DuplicateOutput1 / DuplicateOutput only
+  -> no other device index
+  -> no cross-adapter KMT ownership retry
+  -> no Windows Graphics Capture fallback
+  -> fail if the selected adapter cannot capture
+```
+
+It can still return bytes directly:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot -strict
+```
+
+or write a file and report:
+
+```bat
+KernelScreenshotCli.exe -device 0 -screenshot -strict -out strict.bmp -report strict.json
+```
+
+`-strict` is intentionally rejected with `-device auto`, plain `-screenshot`, or `-display DISPLAYn` because those modes have different selection semantics.
+
 ## Diagnostic commands
 
 | Command | Purpose |
@@ -179,7 +221,8 @@ Exact-display mode never silently switches to another monitor. CCD/VidPN identif
 | `KernelScreenshotCli.exe -list` | Lists WDDM adapters and DXGI outputs |
 | `KernelScreenshotCli.exe -pipeline` | Shows active Windows CCD / D3DKMT / VidPN display paths |
 | `KernelScreenshotCli.exe -vendor-pipeline` | Adds Intel IGCL and NVIDIA NVAPI display diagnostics |
-| `KernelScreenshotCli.exe -device 0 -screenshot ...` | Prefers one adapter index; mainly useful for diagnostics |
+| `KernelScreenshotCli.exe -device 0 -screenshot ...` | Prefers one adapter index, with fallback if needed |
+| `KernelScreenshotCli.exe -device 0 -screenshot -strict ...` | Uses only that adapter's Desktop Duplication path; fails instead of falling back |
 | `KernelScreenshotCli.exe -device auto -screenshot ...` | Explicit spelling of automatic owner-first mode |
 | `KernelScreenshotCli.exe -display DISPLAY1 -screenshot ...` | Captures one exact active monitor |
 

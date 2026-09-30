@@ -152,6 +152,54 @@ namespace
     }
 
 
+
+    int CaptureBmpBytesStrict(
+        uint32_t deviceIndex,
+        std::vector<uint8_t>& bmp)
+    {
+        uint32_t bytes = 0;
+        int status =
+            KS_CaptureBmpStrict(
+                deviceIndex,
+                nullptr,
+                &bytes);
+
+        if (status != KS_OK)
+            return status;
+
+        bmp.assign(bytes, 0);
+
+        for (int attempt = 0;
+             attempt < 2;
+             ++attempt)
+        {
+            uint32_t capacity =
+                static_cast<uint32_t>(
+                    bmp.size());
+
+            status =
+                KS_CaptureBmpStrict(
+                    deviceIndex,
+                    bmp.data(),
+                    &capacity);
+
+            if (status == KS_BUFFER_TOO_SMALL)
+            {
+                bmp.resize(capacity);
+                continue;
+            }
+
+            if (status != KS_OK)
+                return status;
+
+            bmp.resize(capacity);
+            return KS_OK;
+        }
+
+        return status;
+    }
+
+
     int CaptureBmpBytesAuto(
         std::vector<uint8_t>& bmp)
     {
@@ -367,6 +415,36 @@ namespace
             reportPath);
     }
 
+
+    int CaptureBmpStrict(
+        uint32_t deviceIndex,
+        const std::string& outputPath,
+        const std::string& reportPath)
+    {
+        std::vector<uint8_t> bmp;
+        const int status =
+            CaptureBmpBytesStrict(
+                deviceIndex,
+                bmp);
+
+        if (status != KS_OK)
+        {
+            std::cerr
+                << "Strict device "
+                << deviceIndex
+                << " capture failed: "
+                << GetLastErrorText()
+                << "\n";
+            return status;
+        }
+
+        return WriteCaptureResult(
+            bmp,
+            outputPath,
+            reportPath);
+    }
+
+
     int CaptureBmpPreferred(
         uint32_t preferredDeviceIndex,
         const std::string& outputPath,
@@ -426,9 +504,8 @@ namespace
                 break;
 
             if (status == KS_OK ||
-                status == 20 ||
-                status == 21 ||
-                status == 22)
+                (status >= 20 &&
+                 status <= 25))
             {
                 return status;
             }
@@ -504,20 +581,33 @@ namespace
         char** argv,
         int startIndex,
         std::string& outputPath,
-        std::string& reportPath)
+        std::string& reportPath,
+        bool& strictDevice)
     {
         outputPath.clear();
         reportPath.clear();
+        strictDevice = false;
 
         int index = startIndex;
 
         while (index < argc)
         {
+            const std::string option =
+                argv[index];
+
+            if (option == "-strict")
+            {
+                if (strictDevice)
+                    return false;
+
+                strictDevice = true;
+                ++index;
+                continue;
+            }
+
             if (index + 1 >= argc)
                 return false;
 
-            const std::string option =
-                argv[index];
             const std::string value =
                 argv[index + 1];
 
@@ -525,12 +615,14 @@ namespace
             {
                 if (!outputPath.empty())
                     return false;
+
                 outputPath = value;
             }
             else if (option == "-report")
             {
                 if (!reportPath.empty())
                     return false;
+
                 reportPath = value;
             }
             else
@@ -553,7 +645,8 @@ namespace
             << "  KernelScreenshotCli.exe -vendor-pipeline\n"
             << "  KernelScreenshotCli.exe -screenshot [-out <file.bmp>] [-report <file.json>]\n"
             << "  KernelScreenshotCli.exe -display <DISPLAYn> -screenshot [-out <file.bmp>] [-report <file.json>]\n"
-            << "  KernelScreenshotCli.exe -device <index|auto> -screenshot [-out <file.bmp>] [-report <file.json>]\n";
+            << "  KernelScreenshotCli.exe -device auto -screenshot [-out <file.bmp>] [-report <file.json>]\n"
+            << "  KernelScreenshotCli.exe -device <index> -screenshot [-strict] [-out <file.bmp>] [-report <file.json>]\n";
     }
 }
 
@@ -573,15 +666,24 @@ int main(int argc, char** argv)
     {
         std::string outputPath;
         std::string reportPath;
+        bool strictDevice = false;
 
         if (!ParseCaptureOptions(
                 argc,
                 argv,
                 2,
                 outputPath,
-                reportPath))
+                reportPath,
+                strictDevice))
         {
             PrintUsage();
+            return 2;
+        }
+
+        if (strictDevice)
+        {
+            std::cerr
+                << "-strict is valid only with a numeric -device <index>.\n";
             return 2;
         }
 
@@ -596,15 +698,24 @@ int main(int argc, char** argv)
     {
         std::string outputPath;
         std::string reportPath;
+        bool strictDevice = false;
 
         if (!ParseCaptureOptions(
                 argc,
                 argv,
                 4,
                 outputPath,
-                reportPath))
+                reportPath,
+                strictDevice))
         {
             PrintUsage();
+            return 2;
+        }
+
+        if (strictDevice)
+        {
+            std::cerr
+                << "-strict is valid only with a numeric -device <index>.\n";
             return 2;
         }
 
@@ -620,13 +731,15 @@ int main(int argc, char** argv)
     {
         std::string outputPath;
         std::string reportPath;
+        bool strictDevice = false;
 
         if (!ParseCaptureOptions(
                 argc,
                 argv,
                 4,
                 outputPath,
-                reportPath))
+                reportPath,
+                strictDevice))
         {
             PrintUsage();
             return 2;
@@ -637,6 +750,13 @@ int main(int argc, char** argv)
 
         if (deviceArgument == "auto")
         {
+            if (strictDevice)
+            {
+                std::cerr
+                    << "-strict cannot be combined with -device auto.\n";
+                return 2;
+            }
+
             return CaptureBmpAuto(
                 outputPath,
                 reportPath);
@@ -658,8 +778,19 @@ int main(int argc, char** argv)
             return 2;
         }
 
+        const uint32_t deviceIndex =
+            static_cast<uint32_t>(parsed);
+
+        if (strictDevice)
+        {
+            return CaptureBmpStrict(
+                deviceIndex,
+                outputPath,
+                reportPath);
+        }
+
         return CaptureBmpPreferred(
-            static_cast<uint32_t>(parsed),
+            deviceIndex,
             outputPath,
             reportPath);
     }
