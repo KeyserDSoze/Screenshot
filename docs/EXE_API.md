@@ -385,6 +385,6 @@ Command:
 KernelScreenshotCli.exe -vendor-pipeline
 ```
 
-The command is diagnostic and read-only. It dynamically loads vendor runtime components already installed by the GPU driver. The first implementation probes Intel IGCL through `ControlLib.dll` and reports Intel adapter LUID/PCI identity, enumerated display encoders, applied timing, output/mux type, active/attached/dithering flags, display feature flags, and the current wire color model/depth when supported. It also reports whether the NVIDIA NVAPI runtime is present; deeper NVAPI display enumeration is a separate next step.
+The command is diagnostic and read-only. It dynamically loads vendor runtime components already installed by the GPU driver. The first implementation probes Intel IGCL through `ControlLib.dll` and reports Intel adapter LUID/PCI identity, enumerated display encoders, applied timing, output/mux type, active/attached/dithering flags, display feature flags, and the current wire color model/depth when supported. It also probes NVIDIA NVAPI dynamically from `nvapi64.dll` and reports physical GPU identity, PCI/bus information, connected display IDs and their active/connected/OS-visible state, output type, and current SDR/HDR output mode when supported.
 
 The command does not install a kernel driver and does not modify display settings.

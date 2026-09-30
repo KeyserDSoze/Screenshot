@@ -195,6 +195,88 @@ namespace
             result_t (__cdecl*)(display_handle_t, get_set_wire_format_config_t*);
     }
 
+
+    namespace nvapi_abi
+    {
+        using status_t = int32_t;
+        using physical_gpu_handle_t = void*;
+        using query_interface_t = void* (__cdecl*)(uint32_t);
+
+        constexpr status_t OK = 0;
+        constexpr uint32_t MAX_PHYSICAL_GPUS = 64;
+        constexpr uint32_t SHORT_STRING_MAX = 64;
+
+        constexpr uint32_t ID_INITIALIZE = 0x0150e828;
+        constexpr uint32_t ID_UNLOAD = 0xd22bdd7e;
+        constexpr uint32_t ID_GET_ERROR_MESSAGE = 0x6c2d048c;
+        constexpr uint32_t ID_ENUM_PHYSICAL_GPUS = 0xe5ac921f;
+        constexpr uint32_t ID_GPU_GET_FULL_NAME = 0xceee8e9f;
+        constexpr uint32_t ID_GPU_GET_PCI_IDENTIFIERS = 0x2ddfb66e;
+        constexpr uint32_t ID_GPU_GET_BUS_ID = 0x1be0b8e5;
+        constexpr uint32_t ID_GPU_GET_BUS_SLOT_ID = 0x2a0a350f;
+        constexpr uint32_t ID_GPU_GET_CONNECTED_DISPLAY_IDS = 0x0078dba2;
+        constexpr uint32_t ID_GPU_GET_OUTPUT_TYPE = 0x40a505e4;
+        constexpr uint32_t ID_DISP_GET_OUTPUT_MODE = 0x81fed88d;
+
+        struct gpu_display_ids_t
+        {
+            uint32_t version;
+            int32_t connectorType;
+            uint32_t displayId;
+            uint32_t flags;
+        };
+
+        constexpr uint32_t GPU_DISPLAYIDS_VER =
+            static_cast<uint32_t>(
+                sizeof(gpu_display_ids_t)) |
+            (3u << 16);
+
+        using pfn_initialize_t =
+            status_t (__cdecl*)();
+        using pfn_unload_t =
+            status_t (__cdecl*)();
+        using pfn_get_error_message_t =
+            status_t (__cdecl*)(status_t, char*);
+        using pfn_enum_physical_gpus_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t*,
+                uint32_t*);
+        using pfn_gpu_get_full_name_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t,
+                char*);
+        using pfn_gpu_get_pci_identifiers_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t,
+                uint32_t*,
+                uint32_t*,
+                uint32_t*,
+                uint32_t*);
+        using pfn_gpu_get_bus_id_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t,
+                uint32_t*);
+        using pfn_gpu_get_bus_slot_id_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t,
+                uint32_t*);
+        using pfn_gpu_get_connected_display_ids_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t,
+                gpu_display_ids_t*,
+                uint32_t*,
+                uint32_t);
+        using pfn_gpu_get_output_type_t =
+            status_t (__cdecl*)(
+                physical_gpu_handle_t,
+                uint32_t,
+                int32_t*);
+        using pfn_disp_get_output_mode_t =
+            status_t (__cdecl*)(
+                uint32_t,
+                int32_t*);
+    }
+
     void SetError(const std::string& value)
     {
         g_LastError = value;
@@ -708,6 +790,429 @@ namespace
         }
     }
 
+
+    std::string NvapiConnectorTypeLabel(int32_t value)
+    {
+        switch (value)
+        {
+        case 0: return "Uninitialized";
+        case 1: return "VGA";
+        case 2: return "Component";
+        case 3: return "SVideo";
+        case 4: return "HDMI";
+        case 5: return "DVI";
+        case 6: return "LVDS";
+        case 7: return "DisplayPort";
+        case 8: return "Composite";
+        default: return "Unknown";
+        }
+    }
+
+    std::string NvapiOutputTypeLabel(int32_t value)
+    {
+        switch (value)
+        {
+        case 1: return "CRT";
+        case 2: return "DigitalFlatPanel";
+        case 3: return "TV";
+        default: return "Unknown";
+        }
+    }
+
+    std::string NvapiOutputModeLabel(int32_t value)
+    {
+        switch (value)
+        {
+        case 0: return "SDR";
+        case 1: return "HDR10";
+        case 2: return "HDR10PlusGaming";
+        default: return "Unknown";
+        }
+    }
+
+    void AppendNvidiaVendorJson(std::ostringstream& json)
+    {
+        using namespace nvapi_abi;
+
+        HMODULE module = LoadLibraryExW(
+            L"nvapi64.dll",
+            nullptr,
+            LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+        json << "\"nvidia\":{";
+
+        if (module == nullptr)
+        {
+            json
+                << "\"available\":false"
+                << ",\"library\":\"nvapi64.dll\""
+                << ",\"loadError\":" << GetLastError()
+                << "}";
+            return;
+        }
+
+        auto queryInterface =
+            reinterpret_cast<query_interface_t>(
+                GetProcAddress(
+                    module,
+                    "nvapi_QueryInterface"));
+
+        if (queryInterface == nullptr)
+        {
+            json
+                << "\"available\":true"
+                << ",\"library\":\"nvapi64.dll\""
+                << ",\"error\":\"nvapi_QueryInterface export is missing\""
+                << "}";
+            FreeLibrary(module);
+            return;
+        }
+
+        const auto initialize =
+            reinterpret_cast<pfn_initialize_t>(
+                queryInterface(ID_INITIALIZE));
+        const auto unload =
+            reinterpret_cast<pfn_unload_t>(
+                queryInterface(ID_UNLOAD));
+        const auto getErrorMessage =
+            reinterpret_cast<pfn_get_error_message_t>(
+                queryInterface(ID_GET_ERROR_MESSAGE));
+        const auto enumPhysicalGpus =
+            reinterpret_cast<pfn_enum_physical_gpus_t>(
+                queryInterface(ID_ENUM_PHYSICAL_GPUS));
+        const auto getFullName =
+            reinterpret_cast<pfn_gpu_get_full_name_t>(
+                queryInterface(ID_GPU_GET_FULL_NAME));
+        const auto getPciIdentifiers =
+            reinterpret_cast<pfn_gpu_get_pci_identifiers_t>(
+                queryInterface(ID_GPU_GET_PCI_IDENTIFIERS));
+        const auto getBusId =
+            reinterpret_cast<pfn_gpu_get_bus_id_t>(
+                queryInterface(ID_GPU_GET_BUS_ID));
+        const auto getBusSlotId =
+            reinterpret_cast<pfn_gpu_get_bus_slot_id_t>(
+                queryInterface(ID_GPU_GET_BUS_SLOT_ID));
+        const auto getConnectedDisplayIds =
+            reinterpret_cast<pfn_gpu_get_connected_display_ids_t>(
+                queryInterface(ID_GPU_GET_CONNECTED_DISPLAY_IDS));
+        const auto getOutputType =
+            reinterpret_cast<pfn_gpu_get_output_type_t>(
+                queryInterface(ID_GPU_GET_OUTPUT_TYPE));
+        const auto getOutputMode =
+            reinterpret_cast<pfn_disp_get_output_mode_t>(
+                queryInterface(ID_DISP_GET_OUTPUT_MODE));
+
+        if (initialize == nullptr ||
+            enumPhysicalGpus == nullptr)
+        {
+            json
+                << "\"available\":true"
+                << ",\"library\":\"nvapi64.dll\""
+                << ",\"error\":\"Required NVAPI interfaces are missing\""
+                << "}";
+            FreeLibrary(module);
+            return;
+        }
+
+        const status_t initResult = initialize();
+
+        json
+            << "\"available\":true"
+            << ",\"library\":\"nvapi64.dll\""
+            << ",\"initResult\":" << initResult;
+
+        if (initResult != OK)
+        {
+            if (getErrorMessage != nullptr)
+            {
+                char errorText[SHORT_STRING_MAX] = {};
+                if (getErrorMessage(
+                        initResult,
+                        errorText) == OK)
+                {
+                    json
+                        << ",\"initError\":\""
+                        << JsonEscape(errorText)
+                        << "\"";
+                }
+            }
+
+            json << ",\"gpus\":[]}";
+            FreeLibrary(module);
+            return;
+        }
+
+        physical_gpu_handle_t gpuHandles[
+            MAX_PHYSICAL_GPUS] = {};
+        uint32_t gpuCount = 0;
+
+        const status_t enumResult =
+            enumPhysicalGpus(
+                gpuHandles,
+                &gpuCount);
+
+        json
+            << ",\"enumeratePhysicalGpusResult\":"
+            << enumResult
+            << ",\"gpus\":[";
+
+        if (enumResult == OK)
+        {
+            for (uint32_t gpuIndex = 0;
+                 gpuIndex < gpuCount;
+                 ++gpuIndex)
+            {
+                if (gpuIndex != 0)
+                    json << ",";
+
+                const physical_gpu_handle_t gpu =
+                    gpuHandles[gpuIndex];
+
+                json << "{\"index\":" << gpuIndex;
+
+                if (getFullName != nullptr)
+                {
+                    char name[SHORT_STRING_MAX] = {};
+                    const status_t nameResult =
+                        getFullName(gpu, name);
+
+                    json
+                        << ",\"nameResult\":"
+                        << nameResult;
+
+                    if (nameResult == OK)
+                    {
+                        json
+                            << ",\"name\":\""
+                            << JsonEscape(name)
+                            << "\"";
+                    }
+                }
+
+                if (getPciIdentifiers != nullptr)
+                {
+                    uint32_t deviceId = 0;
+                    uint32_t subsystemId = 0;
+                    uint32_t revisionId = 0;
+                    uint32_t externalDeviceId = 0;
+
+                    const status_t pciResult =
+                        getPciIdentifiers(
+                            gpu,
+                            &deviceId,
+                            &subsystemId,
+                            &revisionId,
+                            &externalDeviceId);
+
+                    json
+                        << ",\"pciResult\":"
+                        << pciResult;
+
+                    if (pciResult == OK)
+                    {
+                        json
+                            << ",\"pciDeviceIdRaw\":"
+                            << deviceId
+                            << ",\"pciSubsystemIdRaw\":"
+                            << subsystemId
+                            << ",\"pciRevisionIdRaw\":"
+                            << revisionId
+                            << ",\"pciExternalDeviceIdRaw\":"
+                            << externalDeviceId;
+                    }
+                }
+
+                if (getBusId != nullptr)
+                {
+                    uint32_t busId = 0;
+                    const status_t busResult =
+                        getBusId(
+                            gpu,
+                            &busId);
+
+                    json
+                        << ",\"busIdResult\":"
+                        << busResult;
+
+                    if (busResult == OK)
+                        json << ",\"pciBus\":"
+                             << busId;
+                }
+
+                if (getBusSlotId != nullptr)
+                {
+                    uint32_t slotId = 0;
+                    const status_t slotResult =
+                        getBusSlotId(
+                            gpu,
+                            &slotId);
+
+                    json
+                        << ",\"busSlotIdResult\":"
+                        << slotResult;
+
+                    if (slotResult == OK)
+                        json << ",\"pciBusSlot\":"
+                             << slotId;
+                }
+
+                uint32_t displayCount = 0;
+                status_t displayCountResult = -3;
+
+                if (getConnectedDisplayIds != nullptr)
+                {
+                    displayCountResult =
+                        getConnectedDisplayIds(
+                            gpu,
+                            nullptr,
+                            &displayCount,
+                            0);
+                }
+
+                json
+                    << ",\"connectedDisplayCountResult\":"
+                    << displayCountResult
+                    << ",\"connectedDisplays\":[";
+
+                if (displayCountResult == OK &&
+                    displayCount != 0 &&
+                    getConnectedDisplayIds != nullptr)
+                {
+                    std::vector<gpu_display_ids_t> displays(
+                        displayCount);
+
+                    for (auto& display : displays)
+                        display.version =
+                            GPU_DISPLAYIDS_VER;
+
+                    status_t displayResult =
+                        getConnectedDisplayIds(
+                            gpu,
+                            displays.data(),
+                            &displayCount,
+                            0);
+
+                    if (displayResult == OK)
+                    {
+                        displays.resize(displayCount);
+
+                        for (size_t displayIndex = 0;
+                             displayIndex < displays.size();
+                             ++displayIndex)
+                        {
+                            if (displayIndex != 0)
+                                json << ",";
+
+                            const gpu_display_ids_t& display =
+                                displays[displayIndex];
+
+                            json
+                                << "{"
+                                << "\"index\":"
+                                << displayIndex
+                                << ",\"displayId\":"
+                                << display.displayId
+                                << ",\"connectorType\":"
+                                << display.connectorType
+                                << ",\"connectorTypeName\":\""
+                                << NvapiConnectorTypeLabel(
+                                    display.connectorType)
+                                << "\""
+                                << ",\"isDynamic\":"
+                                << ((display.flags & (1u << 0)) != 0
+                                    ? "true"
+                                    : "false")
+                                << ",\"isMultiStreamRootNode\":"
+                                << ((display.flags & (1u << 1)) != 0
+                                    ? "true"
+                                    : "false")
+                                << ",\"isActive\":"
+                                << ((display.flags & (1u << 2)) != 0
+                                    ? "true"
+                                    : "false")
+                                << ",\"isCluster\":"
+                                << ((display.flags & (1u << 3)) != 0
+                                    ? "true"
+                                    : "false")
+                                << ",\"isOSVisible\":"
+                                << ((display.flags & (1u << 4)) != 0
+                                    ? "true"
+                                    : "false")
+                                << ",\"isConnected\":"
+                                << ((display.flags & (1u << 6)) != 0
+                                    ? "true"
+                                    : "false")
+                                << ",\"isPhysicallyConnected\":"
+                                << ((display.flags & (1u << 17)) != 0
+                                    ? "true"
+                                    : "false");
+
+                            if (getOutputType != nullptr)
+                            {
+                                int32_t outputType = 0;
+                                const status_t outputTypeResult =
+                                    getOutputType(
+                                        gpu,
+                                        display.displayId,
+                                        &outputType);
+
+                                json
+                                    << ",\"outputTypeResult\":"
+                                    << outputTypeResult;
+
+                                if (outputTypeResult == OK)
+                                {
+                                    json
+                                        << ",\"outputType\":"
+                                        << outputType
+                                        << ",\"outputTypeName\":\""
+                                        << NvapiOutputTypeLabel(
+                                            outputType)
+                                        << "\"";
+                                }
+                            }
+
+                            if (getOutputMode != nullptr)
+                            {
+                                int32_t outputMode = 0;
+                                const status_t outputModeResult =
+                                    getOutputMode(
+                                        display.displayId,
+                                        &outputMode);
+
+                                json
+                                    << ",\"outputModeResult\":"
+                                    << outputModeResult;
+
+                                if (outputModeResult == OK)
+                                {
+                                    json
+                                        << ",\"outputMode\":"
+                                        << outputMode
+                                        << ",\"outputModeName\":\""
+                                        << NvapiOutputModeLabel(
+                                            outputMode)
+                                        << "\"";
+                                }
+                            }
+
+                            json << "}";
+                        }
+                    }
+                }
+
+                json << "]}";
+            }
+        }
+
+        json << "]}";
+
+        if (unload != nullptr)
+            unload();
+
+        FreeLibrary(module);
+    }
+
     int BuildVendorPipelinesJson(std::string& jsonText)
     {
         using namespace igcl_abi;
@@ -726,13 +1231,10 @@ namespace
                 << "\"available\":false"
                 << ",\"library\":\"ControlLib.dll\""
                 << ",\"loadError\":" << GetLastError()
-                << "},\"nvidia\":{"
-                << "\"available\":"
-                << (GetModuleHandleW(L"nvapi64.dll") != nullptr
-                    ? "true"
-                    : "false")
-                << ",\"note\":\"NVAPI deep probe not implemented yet\""
-                << "}}";
+                << "}";
+
+            AppendNvidiaVendorJson(json);
+            json << "}";
 
             jsonText = json.str();
             return KS_OK;
@@ -805,13 +1307,10 @@ namespace
         {
             json
                 << ",\"adapters\":[]"
-                << "},\"nvidia\":{"
-                << "\"available\":"
-                << (GetModuleHandleW(L"nvapi64.dll") != nullptr
-                    ? "true"
-                    : "false")
-                << ",\"note\":\"NVAPI deep probe not implemented yet\""
-                << "}}";
+                << "}";
+
+            AppendNvidiaVendorJson(json);
+            json << "}";
 
             FreeLibrary(module);
             jsonText = json.str();
@@ -1097,27 +1596,9 @@ namespace
         ctlClose(api);
         FreeLibrary(module);
 
-        HMODULE nvapi = LoadLibraryExW(
-            L"nvapi64.dll",
-            nullptr,
-            LOAD_LIBRARY_SEARCH_SYSTEM32);
-
-        json
-            << ",\"nvidia\":{"
-            << "\"available\":"
-            << (nvapi != nullptr
-                ? "true"
-                : "false")
-            << ",\"library\":\"nvapi64.dll\""
-            << ",\"note\":\"NVAPI deep probe is the next vendor module\"";
-
-        if (nvapi == nullptr)
-            json << ",\"loadError\":" << GetLastError();
-
-        json << "}}";
-
-        if (nvapi != nullptr)
-            FreeLibrary(nvapi);
+        json << ",";
+        AppendNvidiaVendorJson(json);
+        json << "}";
 
         jsonText = json.str();
         return KS_OK;

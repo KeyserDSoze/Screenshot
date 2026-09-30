@@ -201,4 +201,4 @@ The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-
 
 ### Vendor display probe
 
-`-vendor-pipeline` optionally loads the Intel IGCL runtime already shipped with supported Intel graphics drivers (`ControlLib.dll`) and reports adapter/display timing, output type, mux type, display flags, feature flags and current wire color model/depth. NVIDIA NVAPI runtime detection is included; deeper NVAPI enumeration is planned next. No driver is installed or replaced.
+`-vendor-pipeline` optionally loads the Intel IGCL runtime already shipped with supported Intel graphics drivers (`ControlLib.dll`) and reports adapter/display timing, output type, mux type, display flags, feature flags and current wire color model/depth. NVIDIA NVAPI is also probed dynamically from the installed driver: physical GPUs, PCI/bus identity, connected display IDs, connection state, output type and current SDR/HDR output mode are reported when the interfaces are available. No driver is installed or replaced.
