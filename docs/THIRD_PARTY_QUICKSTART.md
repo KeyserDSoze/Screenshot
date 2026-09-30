@@ -96,6 +96,21 @@ KernelScreenshotCli.exe -device 0 -screenshot
 
 A numeric index is treated as a preferred adapter; if it fails, the CLI retains its fault-tolerant fallback to other enumerated adapters.
 
+### Bytes are the native CLI integration mode
+
+For another application, omitting `-out` is intentional: the EXE returns the screenshot through stdout as raw BMP bytes. No temporary BMP file is required.
+
+The automatic form is:
+
+```text
+KernelScreenshotCli.exe -screenshot
+        |
+        +-- stdout: complete BMP byte stream
+        +-- stderr: text errors only
+```
+
+The caller can read stdout directly into a `byte[]`, `MemoryStream`, buffer, pipe, or equivalent binary container. The same applies to `-display DISPLAYn -screenshot` and `-device auto -screenshot`.
+
 ## 3. Capture a screenshot as bytes
 
 Run:

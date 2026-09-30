@@ -17,15 +17,55 @@ Open Command Prompt or PowerShell in that directory and run the commands below.
 
 The tool is Windows x64. It uses the graphics drivers already installed by Windows / Intel / NVIDIA. It does not replace them.
 
-## Simplest command: automatic screenshot
+## Output modes: bytes or file
 
-For normal use:
+There are two equivalent ways to receive the screenshot.
+
+**1. Receive the BMP as bytes on stdout** — omit `-out`:
+
+```bat
+KernelScreenshotCli.exe -screenshot
+```
+
+A program that launches the EXE should read `stdout` as a **binary stream**. The bytes already contain the complete BMP file header plus pixel data; there is no JSON wrapper and no Base64 conversion.
+
+**2. Ask the EXE to write the BMP file** — use `-out`:
 
 ```bat
 KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 ```
 
-This is the recommended command.
+Both commands use exactly the same automatic capture logic. `-out` changes only where the resulting BMP bytes are written.
+
+You can combine byte-stream output with a separate JSON report:
+
+```bat
+KernelScreenshotCli.exe -screenshot -report capture.json
+```
+
+In that case:
+
+```text
+stdout       = raw BMP bytes
+capture.json = capture report
+stderr       = errors only
+```
+
+## Simplest command: automatic screenshot
+
+For normal use, choose either byte-stream output:
+
+```bat
+KernelScreenshotCli.exe -screenshot
+```
+
+or direct file output:
+
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp
+```
+
+Both are recommended. The first is usually better for programmatic integration; the second is convenient for shell/manual use.
 
 You do not need to run `-list` first and you do not need to choose Intel or NVIDIA manually.
 

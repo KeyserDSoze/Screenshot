@@ -230,6 +230,28 @@ The engine resolves the selected path's adapter LUID from CCD, attempts Desktop 
 
 This is the preferred command when the machine has multiple active displays and the caller needs deterministic monitor selection.
 
+## Binary screenshot contract
+
+For every screenshot form, `-out` is optional. If it is omitted, stdout is the complete binary BMP:
+
+```bat
+KernelScreenshotCli.exe -screenshot
+KernelScreenshotCli.exe -device auto -screenshot
+KernelScreenshotCli.exe -display DISPLAY1 -screenshot
+```
+
+These commands do **not** print a filename, JSON, Base64, or textual wrapper to stdout. The caller receives the BMP bytes directly and may keep them in memory, save them, decode them, hash them, or pass them to another component.
+
+Using `-out file.bmp` changes only the destination of those bytes. Capture selection and backend behavior are otherwise the same.
+
+`-report file.json` is independent of the image destination. Therefore this is valid:
+
+```bat
+KernelScreenshotCli.exe -screenshot -report capture.json
+```
+
+where stdout remains binary BMP data and the JSON report goes to `capture.json`.
+
 ## Capture screenshot to stdout
 
 Command:

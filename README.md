@@ -77,15 +77,16 @@ D3DKMT is a documented low-level user-mode interface into the Windows graphics k
 
 ## Reusable DLL
 
-The project now also builds `KernelScreenshot.dll`, a native x64 C ABI that exposes:
+The project now also builds `KernelScreenshot.dll`, a native x64 C ABI. The primary capture entry points are:
 
 ```text
-KS_ListDevicesJson
+KS_CaptureBmpAuto
+KS_CaptureDisplayBmp
 KS_CaptureBmp
-KS_GetLastErrorMessage
+KS_GetLastCaptureReportJson
 ```
 
-`KS_ListDevicesJson` returns UTF-8 JSON describing the WDDM adapters and their outputs, including how many outputs are currently attached to the Windows desktop. `KS_CaptureBmp(deviceIndex, ...)` returns the screenshot as an in-memory BMP byte array.
+The DLL returns screenshots as in-memory BMP bytes. The CLI exposes the same model: when `-out` is omitted, the complete BMP is written as raw binary bytes to stdout, so another process can consume it directly without creating a file.
 
 The CLI also supports `-device auto`, and numeric `-device N` is treated as a preferred adapter with automatic fallback to the other adapters if the preferred one cannot capture. This makes HDMI connect/disconnect changes on hybrid laptops much more robust.
 
@@ -208,6 +209,28 @@ The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-
 ### Vendor display probe
 
 `-vendor-pipeline` optionally loads the Intel IGCL runtime already shipped with supported Intel graphics drivers (`ControlLib.dll`) and reports adapter/display timing, output type, mux type, display flags, feature flags and current wire color model/depth. NVIDIA NVAPI is also probed dynamically from the installed driver: physical GPUs, PCI/bus identity, connected display IDs, connection state, output type and current SDR/HDR output mode are reported when the interfaces are available. No driver is installed or replaced.
+
+### Byte-stream capture
+
+`-out` is optional. Without it, the executable writes the complete 32-bit BMP directly to stdout as binary bytes:
+
+```bat
+KernelScreenshotCli.exe -screenshot
+```
+
+A parent process can redirect/read stdout as a binary stream and receive the BMP entirely in memory. For example:
+
+```bat
+KernelScreenshotCli.exe -screenshot > screenshot.bmp
+```
+
+The same automatic CCD/VidPN owner selection is used whether the image goes to stdout or to `-out`. A capture report can be written separately while the BMP remains on stdout:
+
+```bat
+KernelScreenshotCli.exe -screenshot -report capture.json
+```
+
+In that form, stdout is BMP bytes, `capture.json` is the report, and stderr remains reserved for errors.
 
 ### Automatic capture selection
 
