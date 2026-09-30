@@ -98,8 +98,10 @@ A numeric index is treated as a preferred adapter; if it fails, the CLI retains 
 Run:
 
 ```bat
-KernelScreenshotCli.exe -device 0 -screenshot
+KernelScreenshotCli.exe -screenshot
 ```
+
+Use `-device N` only when you intentionally want to prefer a specific adapter.
 
 When the command succeeds:
 
@@ -204,19 +206,13 @@ If the client wants to avoid binary stdout entirely, use `-out <file.bmp>` and r
 
 ## C# integration
 
-The recommended C# flow is:
+The recommended C# flow for ordinary one-frame capture is:
 
 ```text
-KernelScreenshotCli.exe -list
+KernelScreenshotCli.exe -screenshot
         |
         v
-deserialize JSON
-        |
-        v
-choose device.index
-        |
-        v
-KernelScreenshotCli.exe -device <index> -screenshot
+CCD/VidPN owner-first automatic selection
         |
         v
 read stdout BaseStream
@@ -224,6 +220,8 @@ read stdout BaseStream
         v
 byte[] containing a complete BMP
 ```
+
+Device-list parsing is optional and is only needed when the application wants diagnostics or an explicit preferred adapter.
 
 ### C# models
 
