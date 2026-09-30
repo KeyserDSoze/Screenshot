@@ -221,6 +221,18 @@ KernelScreenshotCli.exe -screenshot -out screenshot.bmp
 
 The DLL exposes the same behavior through `KS_CaptureBmpAuto`.
 
+### Capture report
+
+Any screenshot command can optionally write a JSON sidecar describing the path that actually succeeded:
+
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp -report capture.json
+```
+
+The report includes request mode (`auto`, `display`, or `device`), the actual adapter LUID/name, GDI display, VidPN source/target IDs, backend (`DuplicateOutput1`, `DuplicateOutput`, or `WindowsGraphicsCapture`), route, dimensions and BMP byte count. The DLL equivalent is `KS_GetLastCaptureReportJson`.
+
+For an end-user command guide, see `docs/CLI_GUIDE.md`.
+
 ### Exact display capture
 
 Multi-monitor callers can now select one active Windows display explicitly by its GDI name from `-pipeline`:

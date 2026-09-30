@@ -35,6 +35,43 @@ namespace
     thread_local bool g_HasPendingBmp = false;
 
 
+    struct CaptureReport
+    {
+        bool Available = false;
+        std::string RequestMode;
+        bool HasRequestedDeviceIndex = false;
+        uint32_t RequestedDeviceIndex = 0;
+        std::string RequestedDisplayName;
+        std::string AutoCandidateKind;
+
+        bool HasAttemptedDeviceIndex = false;
+        uint32_t AttemptedDeviceIndex = 0;
+
+        LUID AdapterLuid = {};
+        bool HasAdapterLuid = false;
+        std::string AdapterName;
+
+        std::string GdiDeviceName;
+        bool HasVidPnSourceId = false;
+        uint32_t VidPnSourceId = 0;
+        bool HasTargetId = false;
+        uint32_t TargetId = 0;
+
+        std::string Backend;
+        std::string Route;
+        uint32_t Width = 0;
+        uint32_t Height = 0;
+        uint64_t BmpBytes = 0;
+    };
+
+    thread_local CaptureReport g_LastCaptureReport;
+
+    void ResetCaptureReport()
+    {
+        g_LastCaptureReport = {};
+    }
+
+
     namespace igcl_abi
     {
         using result_t = uint32_t;
@@ -811,6 +848,315 @@ namespace
         }
 
         return nullptr;
+    }
+
+
+    bool ReadBmpDimensions(
+        const std::vector<uint8_t>& bmpBytes,
+        uint32_t& width,
+        uint32_t& height)
+    {
+        width = 0;
+        height = 0;
+
+        const size_t headerBytes =
+            sizeof(BITMAPFILEHEADER) +
+            sizeof(BITMAPINFOHEADER);
+
+        if (bmpBytes.size() < headerBytes)
+            return false;
+
+        BITMAPFILEHEADER fileHeader = {};
+        BITMAPINFOHEADER infoHeader = {};
+
+        std::memcpy(
+            &fileHeader,
+            bmpBytes.data(),
+            sizeof(fileHeader));
+
+        std::memcpy(
+            &infoHeader,
+            bmpBytes.data() +
+                sizeof(fileHeader),
+            sizeof(infoHeader));
+
+        if (fileHeader.bfType != 0x4D42 ||
+            infoHeader.biWidth <= 0 ||
+            infoHeader.biHeight == 0)
+        {
+            return false;
+        }
+
+        width =
+            static_cast<uint32_t>(
+                infoHeader.biWidth);
+
+        const int64_t signedHeight =
+            static_cast<int64_t>(
+                infoHeader.biHeight);
+
+        height =
+            static_cast<uint32_t>(
+                signedHeight < 0
+                ? -signedHeight
+                : signedHeight);
+
+        return true;
+    }
+
+    std::string GetDxgiAdapterName(
+        const LUID& adapterLuid)
+    {
+        ComPtr<IDXGIFactory1> factory;
+        if (FAILED(
+                CreateDXGIFactory1(
+                    IID_PPV_ARGS(
+                        factory.GetAddressOf()))))
+        {
+            return {};
+        }
+
+        ComPtr<IDXGIAdapter1> adapter =
+            FindDxgiAdapter(
+                factory.Get(),
+                adapterLuid);
+
+        if (adapter == nullptr)
+            return {};
+
+        DXGI_ADAPTER_DESC1 desc = {};
+        if (FAILED(adapter->GetDesc1(&desc)))
+            return {};
+
+        return WideToUtf8(desc.Description);
+    }
+
+    void RecordCaptureSuccess(
+        const LUID& adapterLuid,
+        const wchar_t* displayName,
+        const char* backend,
+        const char* route,
+        const std::vector<uint8_t>& bmpBytes,
+        bool hasAttemptedDeviceIndex,
+        uint32_t attemptedDeviceIndex)
+    {
+        CaptureReport report;
+        report.Available = true;
+        report.HasAdapterLuid = true;
+        report.AdapterLuid = adapterLuid;
+        report.AdapterName =
+            GetDxgiAdapterName(adapterLuid);
+        report.Backend =
+            backend != nullptr ? backend : "";
+        report.Route =
+            route != nullptr ? route : "";
+        report.BmpBytes =
+            static_cast<uint64_t>(
+                bmpBytes.size());
+        report.HasAttemptedDeviceIndex =
+            hasAttemptedDeviceIndex;
+        report.AttemptedDeviceIndex =
+            attemptedDeviceIndex;
+
+        if (displayName != nullptr &&
+            *displayName != L'\0')
+        {
+            report.GdiDeviceName =
+                WideToUtf8(displayName);
+
+            std::vector<ActiveDisplayPath>
+                activePaths;
+
+            if (GetActiveDisplayPaths(
+                    activePaths))
+            {
+                for (const ActiveDisplayPath& path :
+                     activePaths)
+                {
+                    if (_wcsicmp(
+                            path.GdiDeviceName.c_str(),
+                            displayName) != 0)
+                    {
+                        continue;
+                    }
+
+                    report.AdapterLuid =
+                        path.AdapterLuid;
+                    report.HasAdapterLuid =
+                        true;
+                    report.AdapterName =
+                        GetDxgiAdapterName(
+                            path.AdapterLuid);
+                    report.HasVidPnSourceId =
+                        true;
+                    report.VidPnSourceId =
+                        path.SourceId;
+                    report.HasTargetId =
+                        true;
+                    report.TargetId =
+                        path.TargetId;
+                    break;
+                }
+            }
+        }
+
+        ReadBmpDimensions(
+            bmpBytes,
+            report.Width,
+            report.Height);
+
+        g_LastCaptureReport =
+            std::move(report);
+    }
+
+    std::string BuildCaptureReportJson()
+    {
+        const CaptureReport& report =
+            g_LastCaptureReport;
+
+        std::ostringstream json;
+        json
+            << "{"
+            << "\"available\":"
+            << (report.Available
+                ? "true"
+                : "false");
+
+        if (!report.Available)
+        {
+            json << "}";
+            return json.str();
+        }
+
+        json
+            << ",\"request\":{"
+            << "\"mode\":\""
+            << JsonEscape(report.RequestMode)
+            << "\""
+            << ",\"requestedDeviceIndex\":";
+
+        if (report.HasRequestedDeviceIndex)
+            json << report.RequestedDeviceIndex;
+        else
+            json << "null";
+
+        json << ",\"requestedDisplayName\":";
+
+        if (!report.RequestedDisplayName.empty())
+        {
+            json
+                << "\""
+                << JsonEscape(
+                    report.RequestedDisplayName)
+                << "\"";
+        }
+        else
+        {
+            json << "null";
+        }
+
+        json << ",\"autoCandidateKind\":";
+
+        if (!report.AutoCandidateKind.empty())
+        {
+            json
+                << "\""
+                << JsonEscape(
+                    report.AutoCandidateKind)
+                << "\"";
+        }
+        else
+        {
+            json << "null";
+        }
+
+        json
+            << "}"
+            << ",\"result\":{"
+            << "\"attemptedDeviceIndex\":";
+
+        if (report.HasAttemptedDeviceIndex)
+            json << report.AttemptedDeviceIndex;
+        else
+            json << "null";
+
+        json
+            << ",\"adapter\":{"
+            << "\"name\":";
+
+        if (!report.AdapterName.empty())
+        {
+            json
+                << "\""
+                << JsonEscape(
+                    report.AdapterName)
+                << "\"";
+        }
+        else
+        {
+            json << "null";
+        }
+
+        json << ",\"luidHighPart\":";
+        if (report.HasAdapterLuid)
+            json << report.AdapterLuid.HighPart;
+        else
+            json << "null";
+
+        json << ",\"luidLowPart\":";
+        if (report.HasAdapterLuid)
+            json << report.AdapterLuid.LowPart;
+        else
+            json << "null";
+
+        json
+            << "}"
+            << ",\"display\":{"
+            << "\"gdiDeviceName\":";
+
+        if (!report.GdiDeviceName.empty())
+        {
+            json
+                << "\""
+                << JsonEscape(
+                    report.GdiDeviceName)
+                << "\"";
+        }
+        else
+        {
+            json << "null";
+        }
+
+        json << ",\"vidPnSourceId\":";
+        if (report.HasVidPnSourceId)
+            json << report.VidPnSourceId;
+        else
+            json << "null";
+
+        json << ",\"targetId\":";
+        if (report.HasTargetId)
+            json << report.TargetId;
+        else
+            json << "null";
+
+        json
+            << "}"
+            << ",\"backend\":\""
+            << JsonEscape(report.Backend)
+            << "\""
+            << ",\"route\":\""
+            << JsonEscape(report.Route)
+            << "\""
+            << ",\"width\":"
+            << report.Width
+            << ",\"height\":"
+            << report.Height
+            << ",\"bmpBytes\":"
+            << report.BmpBytes
+            << "}"
+            << "}";
+
+        return json.str();
     }
 
     void AppendOutputsJson(
@@ -2729,7 +3075,8 @@ namespace
         const LUID& adapterLuid,
         const wchar_t* displayName,
         std::vector<uint8_t>& bmpBytes,
-        std::string& errorText)
+        std::string& errorText,
+        std::string& backendName)
     {
         if (displayName == nullptr ||
             *displayName == L'\0')
@@ -2852,6 +3199,7 @@ namespace
 
                 if (SUCCEEDED(duplicate1Hr))
                 {
+                    backendName = "DuplicateOutput1";
                     duplication = candidate;
                     break;
                 }
@@ -2869,6 +3217,7 @@ namespace
 
                 if (SUCCEEDED(duplicateHr))
                 {
+                    backendName = "DuplicateOutput";
                     duplication = candidate;
                     break;
                 }
@@ -3041,15 +3390,27 @@ namespace
         }
 
         std::string ddaError;
+        std::string ddaBackend;
         int status =
             CaptureExactDxgiDisplay(
                 selectedPath->AdapterLuid,
                 selectedPath->GdiDeviceName.c_str(),
                 bmpBytes,
-                ddaError);
+                ddaError,
+                ddaBackend);
 
         if (status == KS_OK)
+        {
+            RecordCaptureSuccess(
+                selectedPath->AdapterLuid,
+                selectedPath->GdiDeviceName.c_str(),
+                ddaBackend.c_str(),
+                "exact-display-dda",
+                bmpBytes,
+                false,
+                0);
             return KS_OK;
+        }
 
         if (selectedPath->Monitor == nullptr)
         {
@@ -3068,7 +3429,17 @@ namespace
                 wgcError);
 
         if (status == KS_OK)
+        {
+            RecordCaptureSuccess(
+                selectedPath->AdapterLuid,
+                selectedPath->GdiDeviceName.c_str(),
+                "WindowsGraphicsCapture",
+                "exact-display-wgc",
+                bmpBytes,
+                false,
+                0);
             return KS_OK;
+        }
 
         SetError(
             "Exact display capture failed for " +
@@ -3145,6 +3516,11 @@ namespace
         std::string lastFallbackError;
         std::string lastCcdFallbackOutputName;
         UINT activeCcdPathCount = 0;
+        std::string captureBackend;
+        std::string captureRoute;
+        std::wstring captureDisplayName;
+        LUID captureAdapterLuid =
+            selectedDevice.Luid;
 
         for (UINT outputIndex = 0;; ++outputIndex)
         {
@@ -3190,6 +3566,14 @@ namespace
 
                 if (SUCCEEDED(lastDuplicate1Hr))
                 {
+                    captureBackend =
+                        "DuplicateOutput1";
+                    captureRoute =
+                        "dxgi-output";
+                    captureDisplayName =
+                        desc.DeviceName;
+                    captureAdapterLuid =
+                        selectedDevice.Luid;
                     duplication = candidate;
                     break;
                 }
@@ -3207,6 +3591,14 @@ namespace
 
                 if (SUCCEEDED(lastDuplicateHr))
                 {
+                    captureBackend =
+                        "DuplicateOutput";
+                    captureRoute =
+                        "dxgi-output";
+                    captureDisplayName =
+                        desc.DeviceName;
+                    captureAdapterLuid =
+                        selectedDevice.Luid;
                     duplication = candidate;
                     break;
                 }
@@ -3296,6 +3688,14 @@ namespace
 
                                 if (SUCCEEDED(kmtDupHr))
                                 {
+                                    captureBackend =
+                                        "DuplicateOutput1";
+                                    captureRoute =
+                                        "kmt-owner-retry";
+                                    captureDisplayName =
+                                        kmtDesc.DeviceName;
+                                    captureAdapterLuid =
+                                        kmtLuid;
                                     device = kmtDevice;
                                     context = kmtContext;
                                     duplication = kmtCandidate;
@@ -3315,6 +3715,14 @@ namespace
 
                                 if (SUCCEEDED(kmtDupHr))
                                 {
+                                    captureBackend =
+                                        "DuplicateOutput";
+                                    captureRoute =
+                                        "kmt-owner-retry";
+                                    captureDisplayName =
+                                        kmtDesc.DeviceName;
+                                    captureAdapterLuid =
+                                        kmtLuid;
                                     device = kmtDevice;
                                     context = kmtContext;
                                     duplication = kmtCandidate;
@@ -3344,6 +3752,14 @@ namespace
             if (fallbackStatus == KS_OK)
             {
                 bmpBytes = std::move(fallbackBmp);
+                RecordCaptureSuccess(
+                    selectedDevice.Luid,
+                    desc.DeviceName,
+                    "WindowsGraphicsCapture",
+                    "dxgi-monitor-fallback",
+                    bmpBytes,
+                    true,
+                    deviceIndex);
                 return KS_OK;
             }
 
@@ -3394,6 +3810,14 @@ namespace
                     {
                         bmpBytes =
                             std::move(fallbackBmp);
+                        RecordCaptureSuccess(
+                            activePath.AdapterLuid,
+                            activePath.GdiDeviceName.c_str(),
+                            "WindowsGraphicsCapture",
+                            "ccd-monitor-fallback",
+                            bmpBytes,
+                            true,
+                            deviceIndex);
                         return KS_OK;
                     }
 
@@ -3525,9 +3949,27 @@ namespace
                 textureError);
 
         if (textureStatus != KS_OK)
+        {
             SetError(textureError);
+            return textureStatus;
+        }
 
-        return textureStatus;
+        RecordCaptureSuccess(
+            captureAdapterLuid,
+            captureDisplayName.empty()
+                ? nullptr
+                : captureDisplayName.c_str(),
+            captureBackend.empty()
+                ? "DesktopDuplication"
+                : captureBackend.c_str(),
+            captureRoute.empty()
+                ? "dxgi-output"
+                : captureRoute.c_str(),
+            bmpBytes,
+            true,
+            deviceIndex);
+
+        return KS_OK;
     }
 
 
@@ -3614,7 +4056,13 @@ namespace
                     bmpBytes);
 
             if (status == KS_OK)
+            {
+                g_LastCaptureReport.AutoCandidateKind =
+                    candidateIndex < activeOwnerCount
+                    ? "activeCcdOwner"
+                    : "fallbackAdapter";
                 return KS_OK;
+            }
 
             std::ostringstream failure;
             failure
@@ -3821,6 +4269,7 @@ KS_API int KS_CALL KS_CaptureBmp(
     // the immediately following copy call on the same thread/device.
     if (buffer == nullptr)
     {
+        ResetCaptureReport();
         g_PendingBmp.clear();
         g_PendingBmpDisplayName.clear();
         g_HasPendingBmp = false;
@@ -3830,6 +4279,13 @@ KS_API int KS_CALL KS_CaptureBmp(
 
         if (status != KS_OK)
             return status;
+
+        g_LastCaptureReport.RequestMode =
+            "device";
+        g_LastCaptureReport.HasRequestedDeviceIndex =
+            true;
+        g_LastCaptureReport.RequestedDeviceIndex =
+            deviceIndex;
 
         if (g_PendingBmp.size() > UINT32_MAX)
         {
@@ -3866,12 +4322,21 @@ KS_API int KS_CALL KS_CaptureBmp(
 
     // Also support callers that provide a destination buffer on the first
     // call. In that case capture one frame and copy it immediately.
+    ResetCaptureReport();
+
     std::vector<uint8_t> bmpBytes;
     const int status =
         BuildBmpBytes(deviceIndex, bmpBytes);
 
     if (status != KS_OK)
         return status;
+
+    g_LastCaptureReport.RequestMode =
+        "device";
+    g_LastCaptureReport.HasRequestedDeviceIndex =
+        true;
+    g_LastCaptureReport.RequestedDeviceIndex =
+        deviceIndex;
 
     return CopyBinaryResult(
         bmpBytes,
@@ -3894,6 +4359,7 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
 
     if (buffer == nullptr)
     {
+        ResetCaptureReport();
         g_PendingBmp.clear();
         g_PendingBmpDisplayName.clear();
         g_HasPendingBmp = false;
@@ -3903,6 +4369,9 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
 
         if (status != KS_OK)
             return status;
+
+        g_LastCaptureReport.RequestMode =
+            "auto";
 
         if (g_PendingBmp.size() > UINT32_MAX)
         {
@@ -3941,12 +4410,17 @@ KS_API int KS_CALL KS_CaptureBmpAuto(
         return status;
     }
 
+    ResetCaptureReport();
+
     std::vector<uint8_t> bmpBytes;
     const int status =
         BuildBmpBytesAuto(bmpBytes);
 
     if (status != KS_OK)
         return status;
+
+    g_LastCaptureReport.RequestMode =
+        "auto";
 
     return CopyBinaryResult(
         bmpBytes,
@@ -3991,6 +4465,7 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
 
     if (buffer == nullptr)
     {
+        ResetCaptureReport();
         g_PendingBmp.clear();
         g_PendingBmpAuto = false;
         g_PendingBmpDisplayName.clear();
@@ -4003,6 +4478,11 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
 
         if (status != KS_OK)
             return status;
+
+        g_LastCaptureReport.RequestMode =
+            "display";
+        g_LastCaptureReport.RequestedDisplayName =
+            normalizedUtf8;
 
         if (g_PendingBmp.size() > UINT32_MAX)
         {
@@ -4046,6 +4526,8 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
         return status;
     }
 
+    ResetCaptureReport();
+
     std::vector<uint8_t> bmpBytes;
     const int status =
         BuildBmpBytesForDisplay(
@@ -4055,8 +4537,37 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
     if (status != KS_OK)
         return status;
 
+    g_LastCaptureReport.RequestMode =
+        "display";
+    g_LastCaptureReport.RequestedDisplayName =
+        normalizedUtf8;
+
     return CopyBinaryResult(
         bmpBytes,
+        buffer,
+        bufferBytes);
+}
+
+
+KS_API int KS_CALL KS_GetLastCaptureReportJson(
+    char* buffer,
+    uint32_t* bufferBytes)
+{
+    if (bufferBytes == nullptr)
+    {
+        SetError("bufferBytes is null.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    if (!g_LastCaptureReport.Available)
+    {
+        SetError(
+            "No successful capture report is available on this thread.");
+        return KS_CAPTURE_FAILED;
+    }
+
+    return CopyTextResult(
+        BuildCaptureReportJson(),
         buffer,
         bufferBytes);
 }

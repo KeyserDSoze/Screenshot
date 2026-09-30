@@ -26,6 +26,33 @@ namespace
         return std::string(buffer.data());
     }
 
+
+    std::string GetLastCaptureReportText()
+    {
+        uint32_t bytes = 0;
+        int status =
+            KS_GetLastCaptureReportJson(
+                nullptr,
+                &bytes);
+
+        if (status != KS_OK ||
+            bytes == 0)
+        {
+            return {};
+        }
+
+        std::vector<char> buffer(bytes);
+        status =
+            KS_GetLastCaptureReportJson(
+                buffer.data(),
+                &bytes);
+
+        if (status != KS_OK)
+            return {};
+
+        return std::string(buffer.data());
+    }
+
     int PrintList()
     {
         uint32_t bytes = 0;
@@ -255,9 +282,75 @@ namespace
         return 0;
     }
 
+
+    int WriteCaptureReport(
+        const std::string& reportPath)
+    {
+        if (reportPath.empty())
+            return 0;
+
+        const std::string report =
+            GetLastCaptureReportText();
+
+        if (report.empty())
+        {
+            std::cerr
+                << "Could not obtain capture report: "
+                << GetLastErrorText()
+                << "\n";
+            return 23;
+        }
+
+        std::ofstream file(
+            reportPath,
+            std::ios::binary);
+
+        if (!file)
+        {
+            std::cerr
+                << "Cannot open capture report file: "
+                << reportPath
+                << "\n";
+            return 24;
+        }
+
+        file.write(
+            report.data(),
+            static_cast<std::streamsize>(
+                report.size()));
+        file.put('\n');
+
+        if (!file.good())
+        {
+            std::cerr
+                << "Could not write capture report file.\n";
+            return 25;
+        }
+
+        return 0;
+    }
+
+    int WriteCaptureResult(
+        const std::vector<uint8_t>& bmp,
+        const std::string& outputPath,
+        const std::string& reportPath)
+    {
+        const int bmpStatus =
+            WriteBmp(
+                bmp,
+                outputPath);
+
+        if (bmpStatus != 0)
+            return bmpStatus;
+
+        return WriteCaptureReport(
+            reportPath);
+    }
+
     int CaptureBmp(
         uint32_t deviceIndex,
-        const std::string& outputPath)
+        const std::string& outputPath,
+        const std::string& reportPath)
     {
         std::vector<uint8_t> bmp;
         const int status = CaptureBmpBytes(deviceIndex, bmp);
@@ -268,12 +361,16 @@ namespace
             return status;
         }
 
-        return WriteBmp(bmp, outputPath);
+        return WriteCaptureResult(
+            bmp,
+            outputPath,
+            reportPath);
     }
 
     int CaptureBmpPreferred(
         uint32_t preferredDeviceIndex,
-        const std::string& outputPath)
+        const std::string& outputPath,
+        const std::string& reportPath)
     {
         std::vector<std::string> failures;
 
@@ -292,7 +389,10 @@ namespace
                 deviceExists = true;
 
                 if (status == KS_OK)
-                    return WriteBmp(bmp, outputPath);
+                    return WriteCaptureResult(
+                        bmp,
+                        outputPath,
+                        reportPath);
 
                 failures.push_back(
                     "device " +
@@ -355,7 +455,8 @@ namespace
 
     int CaptureBmpDisplay(
         const std::string& displayName,
-        const std::string& outputPath)
+        const std::string& outputPath,
+        const std::string& reportPath)
     {
         std::vector<uint8_t> bmp;
         const int status =
@@ -371,12 +472,15 @@ namespace
             return status;
         }
 
-        return WriteBmp(
+        return WriteCaptureResult(
             bmp,
-            outputPath);
+            outputPath,
+            reportPath);
     }
 
-    int CaptureBmpAuto(const std::string& outputPath)
+    int CaptureBmpAuto(
+        const std::string& outputPath,
+        const std::string& reportPath)
     {
         std::vector<uint8_t> bmp;
         const int status =
@@ -390,9 +494,55 @@ namespace
             return status;
         }
 
-        return WriteBmp(
+        return WriteCaptureResult(
             bmp,
-            outputPath);
+            outputPath,
+            reportPath);
+    }
+
+    bool ParseCaptureOptions(
+        int argc,
+        char** argv,
+        int startIndex,
+        std::string& outputPath,
+        std::string& reportPath)
+    {
+        outputPath.clear();
+        reportPath.clear();
+
+        int index = startIndex;
+
+        while (index < argc)
+        {
+            if (index + 1 >= argc)
+                return false;
+
+            const std::string option =
+                argv[index];
+            const std::string value =
+                argv[index + 1];
+
+            if (option == "-out")
+            {
+                if (!outputPath.empty())
+                    return false;
+                outputPath = value;
+            }
+            else if (option == "-report")
+            {
+                if (!reportPath.empty())
+                    return false;
+                reportPath = value;
+            }
+            else
+            {
+                return false;
+            }
+
+            index += 2;
+        }
+
+        return true;
     }
 
     void PrintUsage()
@@ -402,12 +552,9 @@ namespace
             << "  KernelScreenshotCli.exe -list\n"
             << "  KernelScreenshotCli.exe -pipeline\n"
             << "  KernelScreenshotCli.exe -vendor-pipeline\n"
-            << "  KernelScreenshotCli.exe -screenshot\n"
-            << "  KernelScreenshotCli.exe -screenshot -out <file.bmp>\n"
-            << "  KernelScreenshotCli.exe -display <DISPLAYn> -screenshot\n"
-            << "  KernelScreenshotCli.exe -display <DISPLAYn> -screenshot -out <file.bmp>\n"
-            << "  KernelScreenshotCli.exe -device <index|auto> -screenshot\n"
-            << "  KernelScreenshotCli.exe -device <index|auto> -screenshot -out <file.bmp>\n";
+            << "  KernelScreenshotCli.exe -screenshot [-out <file.bmp>] [-report <file.json>]\n"
+            << "  KernelScreenshotCli.exe -display <DISPLAYn> -screenshot [-out <file.bmp>] [-report <file.json>]\n"
+            << "  KernelScreenshotCli.exe -device <index|auto> -screenshot [-out <file.bmp>] [-report <file.json>]\n";
     }
 }
 
@@ -426,19 +573,22 @@ int main(int argc, char** argv)
         std::string(argv[1]) == "-screenshot")
     {
         std::string outputPath;
+        std::string reportPath;
 
-        if (argc == 4 &&
-            std::string(argv[2]) == "-out")
-        {
-            outputPath = argv[3];
-        }
-        else if (argc != 2)
+        if (!ParseCaptureOptions(
+                argc,
+                argv,
+                2,
+                outputPath,
+                reportPath))
         {
             PrintUsage();
             return 2;
         }
 
-        return CaptureBmpAuto(outputPath);
+        return CaptureBmpAuto(
+            outputPath,
+            reportPath);
     }
 
     if (argc >= 4 &&
@@ -446,13 +596,14 @@ int main(int argc, char** argv)
         std::string(argv[3]) == "-screenshot")
     {
         std::string outputPath;
+        std::string reportPath;
 
-        if (argc == 6 &&
-            std::string(argv[4]) == "-out")
-        {
-            outputPath = argv[5];
-        }
-        else if (argc != 4)
+        if (!ParseCaptureOptions(
+                argc,
+                argv,
+                4,
+                outputPath,
+                reportPath))
         {
             PrintUsage();
             return 2;
@@ -460,7 +611,8 @@ int main(int argc, char** argv)
 
         return CaptureBmpDisplay(
             argv[2],
-            outputPath);
+            outputPath,
+            reportPath);
     }
 
     if (argc >= 4 &&
@@ -468,35 +620,49 @@ int main(int argc, char** argv)
         std::string(argv[3]) == "-screenshot")
     {
         std::string outputPath;
+        std::string reportPath;
 
-        if (argc == 6 && std::string(argv[4]) == "-out")
-            outputPath = argv[5];
-        else if (argc != 4)
+        if (!ParseCaptureOptions(
+                argc,
+                argv,
+                4,
+                outputPath,
+                reportPath))
         {
             PrintUsage();
             return 2;
         }
 
-        const std::string deviceArgument = argv[2];
+        const std::string deviceArgument =
+            argv[2];
 
         if (deviceArgument == "auto")
-            return CaptureBmpAuto(outputPath);
+        {
+            return CaptureBmpAuto(
+                outputPath,
+                reportPath);
+        }
 
         char* end = nullptr;
         const unsigned long parsed =
-            std::strtoul(deviceArgument.c_str(), &end, 10);
+            std::strtoul(
+                deviceArgument.c_str(),
+                &end,
+                10);
 
         if (end == deviceArgument.c_str() ||
             *end != '\0' ||
             parsed > UINT32_MAX)
         {
-            std::cerr << "Invalid device index. Use an integer or 'auto'.\n";
+            std::cerr
+                << "Invalid device index. Use an integer or 'auto'.\n";
             return 2;
         }
 
         return CaptureBmpPreferred(
             static_cast<uint32_t>(parsed),
-            outputPath);
+            outputPath,
+            reportPath);
     }
 
     PrintUsage();

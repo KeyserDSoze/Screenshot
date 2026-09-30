@@ -199,6 +199,22 @@ A numeric device is treated as the preferred adapter; if it cannot capture, the 
 
 For multi-monitor applications that need a specific active monitor, use `-display DISPLAYn`. Automatic mode still returns the first successful one-frame capture from the active owner ordering.
 
+## Capture report
+
+All screenshot forms accept an optional report path:
+
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp -report capture.json
+KernelScreenshotCli.exe -display DISPLAY1 -screenshot -out display1.bmp -report display1.json
+KernelScreenshotCli.exe -device auto -screenshot -out screenshot.bmp -report capture.json
+```
+
+`-out` and `-report` may be given in either order. `-report` never writes JSON to stdout, so it is safe to use when stdout is carrying binary BMP bytes.
+
+The JSON describes the successful capture route. It includes the request mode, auto candidate classification, actual adapter LUID/name, GDI display name, VidPN source/target IDs, backend, route, width, height and BMP byte count.
+
+Backend values currently include `DuplicateOutput1`, `DuplicateOutput`, and `WindowsGraphicsCapture`. Route values distinguish direct DXGI capture from KMT ownership retry and monitor-scoped fallback paths.
+
 ## Capture one exact display
 
 Use the GDI source name reported by `-pipeline` when a multi-monitor caller needs one specific active display:

@@ -57,6 +57,13 @@ KS_API int KS_CALL KS_CaptureDisplayBmp(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
+// UTF-8 JSON describing the most recent successful capture on the calling
+// thread: selection mode, actual adapter/display owner, backend, route and
+// image dimensions. bufferBytes includes the terminating NUL.
+KS_API int KS_CALL KS_GetLastCaptureReportJson(
+    char* buffer,
+    uint32_t* bufferBytes);
+
 // UTF-8 diagnostic text for the most recent API failure on the calling thread.
 // bufferBytes includes the terminating NUL.
 KS_API int KS_CALL KS_GetLastErrorMessage(char* buffer, uint32_t* bufferBytes);

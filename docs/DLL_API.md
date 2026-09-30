@@ -33,6 +33,10 @@ int __cdecl KS_CaptureDisplayBmp(
     uint8_t* buffer,
     uint32_t* bufferBytes);
 
+int __cdecl KS_GetLastCaptureReportJson(
+    char* buffer,
+    uint32_t* bufferBytes);
+
 int __cdecl KS_GetLastErrorMessage(
     char* buffer,
     uint32_t* bufferBytes);
@@ -162,6 +166,20 @@ int status = KS_CaptureBmp(1, NULL, &bytes);
 uint8_t* bmp = malloc(bytes);
 status = KS_CaptureBmp(1, bmp, &bytes);
 ```
+
+## Capture report
+
+After a successful capture, call `KS_GetLastCaptureReportJson` on the **same thread**. The report belongs to the most recent successful capture on that thread and follows the same two-call text-buffer pattern as the other JSON APIs.
+
+```c
+uint32_t reportBytes = 0;
+int status = KS_GetLastCaptureReportJson(NULL, &reportBytes);
+
+char* report = malloc(reportBytes);
+status = KS_GetLastCaptureReportJson(report, &reportBytes);
+```
+
+The JSON records the request mode, selected/attempted adapter information, actual display owner LUID, GDI display name, VidPN source/target IDs, backend, capture route and output dimensions. A new capture request clears the previous report before it begins, so a failed new capture does not leave an apparently current report behind.
 
 ## DLL location for third-party applications
 

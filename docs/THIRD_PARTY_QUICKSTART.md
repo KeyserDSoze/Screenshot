@@ -37,6 +37,7 @@ Then the C# application can launch `KernelScreenshotCli.exe` by filename only. N
 -vendor-pipeline
 -display <DISPLAYn> -screenshot
 -device <index|auto> -screenshot
+-report <file.json> (optional on screenshot commands)
 ```
 
 For ordinary screenshot use, start with `-screenshot`. It automatically resolves the active CCD/VidPN display owner, captures one frame, and returns a complete BMP image. `-list`, `-pipeline`, `-vendor-pipeline`, and numeric `-device N` are available when an integration needs diagnostics or explicit adapter control.
@@ -146,6 +147,18 @@ KernelScreenshotCli.exe -display DISPLAY5 -screenshot -out external.bmp
 ```
 
 The exact-display path is owner-aware: CCD/VidPN selects the adapter, DDA is attempted for that display, and WGC is used only as a fallback for the same monitor.
+
+## 6. Write a capture report
+
+Add `-report <file.json>` to any successful screenshot command:
+
+```bat
+KernelScreenshotCli.exe -screenshot -out screenshot.bmp -report capture.json
+```
+
+The JSON records which GPU/display actually supplied the frame, the VidPN source/target IDs, whether DDA or WGC succeeded, the internal route used, and the captured dimensions. This is useful for support logs on hybrid Intel/NVIDIA machines.
+
+For a concise end-user command reference, read `CLI_GUIDE.md` from the release package.
 
 ## Important: avoid stdout pipe deadlocks in C#
 
@@ -395,7 +408,7 @@ The DLL API exposes automatic capture directly:
 KS_CaptureBmpAuto
 ```
 
-and also exposes `KS_CaptureDisplayBmp` for one exact active monitor, `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
+and also exposes `KS_CaptureDisplayBmp` for one exact active monitor, `KS_GetLastCaptureReportJson` for the most recent successful capture, `KS_ListDevicesJson`, `KS_ListDisplayPipelinesJson`, `KS_ListVendorPipelinesJson`, explicit `KS_CaptureBmp`, and `KS_GetLastErrorMessage`.
 
 See:
 

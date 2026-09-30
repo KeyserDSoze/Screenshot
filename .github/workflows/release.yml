@@ -42,6 +42,7 @@ jobs:
 
           Copy-Item "Native\KernelScreenshotApi\KernelScreenshotApi.h" $packageDir
           Copy-Item "docs\THIRD_PARTY_QUICKSTART.md" $packageDir
+          Copy-Item "docs\CLI_GUIDE.md" $packageDir
           Copy-Item "docs\EXE_API.md" $packageDir
           Copy-Item "docs\DLL_API.md" $packageDir
 
