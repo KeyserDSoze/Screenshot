@@ -48,6 +48,28 @@ namespace
         return 0;
     }
 
+    int PrintVendorPipeline()
+    {
+        uint32_t bytes = 0;
+        int status = KS_ListVendorPipelinesJson(nullptr, &bytes);
+        if (status != KS_OK)
+        {
+            std::cerr << GetLastErrorText() << "\n";
+            return status;
+        }
+
+        std::vector<char> json(bytes);
+        status = KS_ListVendorPipelinesJson(json.data(), &bytes);
+        if (status != KS_OK)
+        {
+            std::cerr << GetLastErrorText() << "\n";
+            return status;
+        }
+
+        std::cout << json.data() << "\n";
+        return 0;
+    }
+
     int PrintPipeline()
     {
         uint32_t bytes = 0;
@@ -287,6 +309,7 @@ namespace
             << "Usage:\n"
             << "  KernelScreenshotCli.exe -list\n"
             << "  KernelScreenshotCli.exe -pipeline\n"
+            << "  KernelScreenshotCli.exe -vendor-pipeline\n"
             << "  KernelScreenshotCli.exe -device <index|auto> -screenshot\n"
             << "  KernelScreenshotCli.exe -device <index|auto> -screenshot -out <file.bmp>\n";
     }
@@ -299,6 +322,9 @@ int main(int argc, char** argv)
 
     if (argc == 2 && std::string(argv[1]) == "-pipeline")
         return PrintPipeline();
+
+    if (argc == 2 && std::string(argv[1]) == "-vendor-pipeline")
+        return PrintVendorPipeline();
 
     if (argc >= 4 &&
         std::string(argv[1]) == "-device" &&

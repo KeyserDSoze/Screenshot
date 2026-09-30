@@ -96,6 +96,7 @@ Because a DLL is not a command-line executable, `KernelScreenshotCli.exe` provid
 ```bat
 KernelScreenshotCli.exe -list
 KernelScreenshotCli.exe -pipeline
+KernelScreenshotCli.exe -vendor-pipeline
 KernelScreenshotCli.exe -device 0 -screenshot > shot.bmp
 KernelScreenshotCli.exe -device auto -screenshot > shot.bmp
 KernelScreenshotCli.exe -device 0 -screenshot -out shot.bmp
@@ -197,3 +198,7 @@ docs/DLL_API.md
 5. Compare that path with the legacy KMDOD physical-framebuffer experiment.
 
 The KMDOD-derived files retain Microsoft's source headers. The upstream Windows-driver-samples license is copied under `THIRD_PARTY_LICENSES`.
+
+### Vendor display probe
+
+`-vendor-pipeline` optionally loads the Intel IGCL runtime already shipped with supported Intel graphics drivers (`ControlLib.dll`) and reports adapter/display timing, output type, mux type, display flags, feature flags and current wire color model/depth. NVIDIA NVAPI runtime detection is included; deeper NVAPI enumeration is planned next. No driver is installed or replaced.

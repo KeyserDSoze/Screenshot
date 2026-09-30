@@ -32,6 +32,169 @@ namespace
     thread_local uint32_t g_PendingBmpDeviceIndex = 0;
     thread_local bool g_HasPendingBmp = false;
 
+
+    namespace igcl_abi
+    {
+        using result_t = uint32_t;
+        using api_handle_t = void*;
+        using device_handle_t = void*;
+        using display_handle_t = void*;
+
+        constexpr result_t RESULT_SUCCESS = 0;
+        constexpr uint32_t IMPL_VERSION = (1u << 16) | 1u;
+        constexpr uint32_t ADAPTER_FLAG_INTEGRATED = 1u << 0;
+        constexpr uint32_t DISPLAY_CONFIG_ACTIVE = 1u << 0;
+        constexpr uint32_t DISPLAY_CONFIG_ATTACHED = 1u << 1;
+        constexpr uint32_t DISPLAY_CONFIG_DITHERING = 1u << 3;
+
+        struct application_id_t
+        {
+            uint32_t Data1;
+            uint16_t Data2;
+            uint16_t Data3;
+            uint8_t Data4[8];
+        };
+
+        struct init_args_t
+        {
+            uint32_t Size;
+            uint8_t Version;
+            uint32_t AppVersion;
+            uint32_t flags;
+            uint32_t SupportedVersion;
+            application_id_t ApplicationUID;
+        };
+
+        struct firmware_version_t
+        {
+            uint64_t major_version;
+            uint64_t minor_version;
+            uint64_t build_number;
+        };
+
+        struct adapter_bdf_t
+        {
+            uint8_t bus;
+            uint8_t device;
+            uint8_t function;
+        };
+
+        struct device_adapter_properties_t
+        {
+            uint32_t Size;
+            uint8_t Version;
+            void* pDeviceID;
+            uint32_t device_id_size;
+            uint32_t device_type;
+            uint32_t supported_subfunction_flags;
+            uint64_t driver_version;
+            firmware_version_t firmware_version;
+            uint32_t pci_vendor_id;
+            uint32_t pci_device_id;
+            uint32_t rev_id;
+            uint32_t num_eus_per_sub_slice;
+            uint32_t num_sub_slices_per_slice;
+            uint32_t num_slices;
+            char name[100];
+            uint32_t graphics_adapter_properties;
+            uint32_t Frequency;
+            uint16_t pci_subsys_id;
+            uint16_t pci_subsys_vendor_id;
+            adapter_bdf_t adapter_bdf;
+            uint32_t num_xe_cores;
+            char reserved[108];
+        };
+
+        struct generic_void_datatype_t
+        {
+            void* pData;
+            uint32_t size;
+        };
+
+        union os_display_encoder_identifier_t
+        {
+            uint32_t WindowsDisplayEncoderID;
+            generic_void_datatype_t DisplayEncoderID;
+        };
+
+        struct revision_datatype_t
+        {
+            uint8_t major_version;
+            uint8_t minor_version;
+            uint8_t revision_version;
+        };
+
+        struct display_timing_t
+        {
+            uint32_t Size;
+            uint8_t Version;
+            uint64_t PixelClock;
+            uint32_t HActive;
+            uint32_t VActive;
+            uint32_t HTotal;
+            uint32_t VTotal;
+            uint32_t HBlank;
+            uint32_t VBlank;
+            uint32_t HSync;
+            uint32_t VSync;
+            float RefreshRate;
+            uint32_t SignalStandard;
+            uint8_t VicId;
+        };
+
+        struct display_properties_t
+        {
+            uint32_t Size;
+            uint8_t Version;
+            os_display_encoder_identifier_t Os_display_encoder_handle;
+            uint32_t Type;
+            uint32_t AttachedDisplayMuxType;
+            uint32_t ProtocolConverterOutput;
+            revision_datatype_t SupportedSpec;
+            uint32_t SupportedOutputBPCFlags;
+            uint32_t ProtocolConverterType;
+            uint32_t DisplayConfigFlags;
+            uint32_t FeatureEnabledFlags;
+            uint32_t FeatureSupportedFlags;
+            uint32_t AdvancedFeatureEnabledFlags;
+            uint32_t AdvancedFeatureSupportedFlags;
+            display_timing_t Display_Timing_Info;
+            uint32_t ReservedFields[16];
+        };
+
+        struct wire_format_t
+        {
+            uint32_t Size;
+            uint8_t Version;
+            uint32_t ColorModel;
+            uint32_t ColorDepth;
+        };
+
+        struct get_set_wire_format_config_t
+        {
+            uint32_t Size;
+            uint8_t Version;
+            uint32_t Operation;
+            wire_format_t SupportedWireFormat[4];
+            wire_format_t WireFormat;
+        };
+
+        using pfn_init_t =
+            result_t (__cdecl*)(init_args_t*, api_handle_t*);
+        using pfn_close_t =
+            result_t (__cdecl*)(api_handle_t);
+        using pfn_enumerate_devices_t =
+            result_t (__cdecl*)(api_handle_t, uint32_t*, device_handle_t*);
+        using pfn_get_device_properties_t =
+            result_t (__cdecl*)(device_handle_t, device_adapter_properties_t*);
+        using pfn_enumerate_display_outputs_t =
+            result_t (__cdecl*)(device_handle_t, uint32_t*, display_handle_t*);
+        using pfn_get_display_properties_t =
+            result_t (__cdecl*)(display_handle_t, display_properties_t*);
+        using pfn_get_set_wire_format_t =
+            result_t (__cdecl*)(display_handle_t, get_set_wire_format_config_t*);
+    }
+
     void SetError(const std::string& value)
     {
         g_LastError = value;
@@ -506,6 +669,459 @@ namespace
         return KS_OK;
     }
 
+
+
+    std::string IgclOutputTypeLabel(uint32_t value)
+    {
+        switch (value)
+        {
+        case 1: return "DisplayPort";
+        case 2: return "HDMI";
+        case 3: return "DVI";
+        case 4: return "MIPI";
+        case 5: return "CRT";
+        default: return "Invalid";
+        }
+    }
+
+    std::string IgclMuxTypeLabel(uint32_t value)
+    {
+        switch (value)
+        {
+        case 0: return "Native";
+        case 1: return "Thunderbolt";
+        case 2: return "USB-C";
+        case 3: return "USB4";
+        default: return "Unknown";
+        }
+    }
+
+    std::string IgclWireColorModelLabel(uint32_t value)
+    {
+        switch (value)
+        {
+        case 0: return "RGB";
+        case 1: return "YCbCr420";
+        case 2: return "YCbCr422";
+        case 3: return "YCbCr444";
+        default: return "Unknown";
+        }
+    }
+
+    int BuildVendorPipelinesJson(std::string& jsonText)
+    {
+        using namespace igcl_abi;
+
+        HMODULE module = LoadLibraryExW(
+            L"ControlLib.dll",
+            nullptr,
+            LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+        std::ostringstream json;
+        json << "{\"intel\":{";
+
+        if (module == nullptr)
+        {
+            json
+                << "\"available\":false"
+                << ",\"library\":\"ControlLib.dll\""
+                << ",\"loadError\":" << GetLastError()
+                << "},\"nvidia\":{"
+                << "\"available\":"
+                << (GetModuleHandleW(L"nvapi64.dll") != nullptr
+                    ? "true"
+                    : "false")
+                << ",\"note\":\"NVAPI deep probe not implemented yet\""
+                << "}}";
+
+            jsonText = json.str();
+            return KS_OK;
+        }
+
+        const auto ctlInit =
+            reinterpret_cast<pfn_init_t>(
+                GetProcAddress(module, "ctlInit"));
+        const auto ctlClose =
+            reinterpret_cast<pfn_close_t>(
+                GetProcAddress(module, "ctlClose"));
+        const auto ctlEnumerateDevices =
+            reinterpret_cast<pfn_enumerate_devices_t>(
+                GetProcAddress(module, "ctlEnumerateDevices"));
+        const auto ctlGetDeviceProperties =
+            reinterpret_cast<pfn_get_device_properties_t>(
+                GetProcAddress(module, "ctlGetDeviceProperties"));
+        const auto ctlEnumerateDisplayOutputs =
+            reinterpret_cast<pfn_enumerate_display_outputs_t>(
+                GetProcAddress(module, "ctlEnumerateDisplayOutputs"));
+        const auto ctlGetDisplayProperties =
+            reinterpret_cast<pfn_get_display_properties_t>(
+                GetProcAddress(module, "ctlGetDisplayProperties"));
+        const auto ctlGetSetWireFormat =
+            reinterpret_cast<pfn_get_set_wire_format_t>(
+                GetProcAddress(module, "ctlGetSetWireFormat"));
+
+        if (ctlInit == nullptr ||
+            ctlClose == nullptr ||
+            ctlEnumerateDevices == nullptr ||
+            ctlGetDeviceProperties == nullptr ||
+            ctlEnumerateDisplayOutputs == nullptr ||
+            ctlGetDisplayProperties == nullptr)
+        {
+            json
+                << "\"available\":false"
+                << ",\"library\":\"ControlLib.dll\""
+                << ",\"error\":\"Required IGCL exports are missing\""
+                << "},\"nvidia\":{"
+                << "\"available\":"
+                << (GetModuleHandleW(L"nvapi64.dll") != nullptr
+                    ? "true"
+                    : "false")
+                << ",\"note\":\"NVAPI deep probe not implemented yet\""
+                << "}}";
+
+            FreeLibrary(module);
+            jsonText = json.str();
+            return KS_OK;
+        }
+
+        init_args_t init = {};
+        init.Size = sizeof(init);
+        init.AppVersion = IMPL_VERSION;
+
+        api_handle_t api = nullptr;
+        const result_t initResult =
+            ctlInit(&init, &api);
+
+        json
+            << "\"available\":true"
+            << ",\"library\":\"ControlLib.dll\""
+            << ",\"initResult\":" << initResult
+            << ",\"requestedVersion\":"
+            << IMPL_VERSION
+            << ",\"supportedVersion\":"
+            << init.SupportedVersion;
+
+        if (initResult != RESULT_SUCCESS || api == nullptr)
+        {
+            json
+                << ",\"adapters\":[]"
+                << "},\"nvidia\":{"
+                << "\"available\":"
+                << (GetModuleHandleW(L"nvapi64.dll") != nullptr
+                    ? "true"
+                    : "false")
+                << ",\"note\":\"NVAPI deep probe not implemented yet\""
+                << "}}";
+
+            FreeLibrary(module);
+            jsonText = json.str();
+            return KS_OK;
+        }
+
+        uint32_t adapterCount = 0;
+        result_t result =
+            ctlEnumerateDevices(
+                api,
+                &adapterCount,
+                nullptr);
+
+        std::vector<device_handle_t> adapters;
+
+        if (result == RESULT_SUCCESS && adapterCount != 0)
+        {
+            adapters.resize(adapterCount, nullptr);
+            result =
+                ctlEnumerateDevices(
+                    api,
+                    &adapterCount,
+                    adapters.data());
+
+            if (result != RESULT_SUCCESS)
+                adapters.clear();
+            else
+                adapters.resize(adapterCount);
+        }
+
+        json
+            << ",\"enumerateDevicesResult\":"
+            << result
+            << ",\"adapters\":[";
+
+        for (size_t adapterIndex = 0;
+             adapterIndex < adapters.size();
+             ++adapterIndex)
+        {
+            if (adapterIndex != 0)
+                json << ",";
+
+            LUID luid = {};
+            device_adapter_properties_t props = {};
+            props.Size = sizeof(props);
+            props.pDeviceID = &luid;
+            props.device_id_size = sizeof(luid);
+
+            const result_t propsResult =
+                ctlGetDeviceProperties(
+                    adapters[adapterIndex],
+                    &props);
+
+            json
+                << "{"
+                << "\"index\":" << adapterIndex
+                << ",\"propertiesResult\":"
+                << propsResult;
+
+            if (propsResult == RESULT_SUCCESS)
+            {
+                json
+                    << ",\"name\":\""
+                    << JsonEscape(std::string(props.name))
+                    << "\""
+                    << ",\"luidHighPart\":"
+                    << luid.HighPart
+                    << ",\"luidLowPart\":"
+                    << luid.LowPart
+                    << ",\"pciVendorId\":"
+                    << props.pci_vendor_id
+                    << ",\"pciDeviceId\":"
+                    << props.pci_device_id
+                    << ",\"pciSubsysVendorId\":"
+                    << props.pci_subsys_vendor_id
+                    << ",\"pciSubsysId\":"
+                    << props.pci_subsys_id
+                    << ",\"pciBus\":"
+                    << static_cast<unsigned int>(
+                        props.adapter_bdf.bus)
+                    << ",\"pciDevice\":"
+                    << static_cast<unsigned int>(
+                        props.adapter_bdf.device)
+                    << ",\"pciFunction\":"
+                    << static_cast<unsigned int>(
+                        props.adapter_bdf.function)
+                    << ",\"integrated\":"
+                    << ((props.graphics_adapter_properties &
+                         ADAPTER_FLAG_INTEGRATED) != 0
+                        ? "true"
+                        : "false")
+                    << ",\"driverVersionRaw\":"
+                    << props.driver_version;
+            }
+
+            uint32_t displayCount = 0;
+            result_t displayEnumResult =
+                ctlEnumerateDisplayOutputs(
+                    adapters[adapterIndex],
+                    &displayCount,
+                    nullptr);
+
+            std::vector<display_handle_t> displays;
+            if (displayEnumResult == RESULT_SUCCESS &&
+                displayCount != 0)
+            {
+                displays.resize(displayCount, nullptr);
+                displayEnumResult =
+                    ctlEnumerateDisplayOutputs(
+                        adapters[adapterIndex],
+                        &displayCount,
+                        displays.data());
+
+                if (displayEnumResult != RESULT_SUCCESS)
+                    displays.clear();
+                else
+                    displays.resize(displayCount);
+            }
+
+            json
+                << ",\"enumerateDisplaysResult\":"
+                << displayEnumResult
+                << ",\"displays\":[";
+
+            for (size_t displayIndex = 0;
+                 displayIndex < displays.size();
+                 ++displayIndex)
+            {
+                if (displayIndex != 0)
+                    json << ",";
+
+                display_properties_t display = {};
+                display.Size = sizeof(display);
+                display.Display_Timing_Info.Size =
+                    sizeof(display.Display_Timing_Info);
+
+                const result_t displayResult =
+                    ctlGetDisplayProperties(
+                        displays[displayIndex],
+                        &display);
+
+                json
+                    << "{"
+                    << "\"index\":" << displayIndex
+                    << ",\"propertiesResult\":"
+                    << displayResult;
+
+                if (displayResult == RESULT_SUCCESS)
+                {
+                    json
+                        << ",\"windowsDisplayEncoderId\":"
+                        << display
+                            .Os_display_encoder_handle
+                            .WindowsDisplayEncoderID
+                        << ",\"type\":"
+                        << display.Type
+                        << ",\"typeName\":\""
+                        << IgclOutputTypeLabel(display.Type)
+                        << "\""
+                        << ",\"muxType\":"
+                        << display.AttachedDisplayMuxType
+                        << ",\"muxTypeName\":\""
+                        << IgclMuxTypeLabel(
+                            display.AttachedDisplayMuxType)
+                        << "\""
+                        << ",\"protocolConverterOutput\":"
+                        << display.ProtocolConverterOutput
+                        << ",\"supportedSpec\":\""
+                        << static_cast<unsigned int>(
+                            display.SupportedSpec.major_version)
+                        << "."
+                        << static_cast<unsigned int>(
+                            display.SupportedSpec.minor_version)
+                        << "."
+                        << static_cast<unsigned int>(
+                            display.SupportedSpec.revision_version)
+                        << "\""
+                        << ",\"supportedBpcFlags\":"
+                        << display.SupportedOutputBPCFlags
+                        << ",\"displayConfigFlags\":"
+                        << display.DisplayConfigFlags
+                        << ",\"active\":"
+                        << ((display.DisplayConfigFlags &
+                             DISPLAY_CONFIG_ACTIVE) != 0
+                            ? "true"
+                            : "false")
+                        << ",\"attached\":"
+                        << ((display.DisplayConfigFlags &
+                             DISPLAY_CONFIG_ATTACHED) != 0
+                            ? "true"
+                            : "false")
+                        << ",\"ditheringEnabled\":"
+                        << ((display.DisplayConfigFlags &
+                             DISPLAY_CONFIG_DITHERING) != 0
+                            ? "true"
+                            : "false")
+                        << ",\"featureEnabledFlags\":"
+                        << display.FeatureEnabledFlags
+                        << ",\"featureSupportedFlags\":"
+                        << display.FeatureSupportedFlags
+                        << ",\"advancedFeatureEnabledFlags\":"
+                        << display.AdvancedFeatureEnabledFlags
+                        << ",\"advancedFeatureSupportedFlags\":"
+                        << display.AdvancedFeatureSupportedFlags
+                        << ",\"timing\":{"
+                        << "\"pixelClock\":"
+                        << display.Display_Timing_Info.PixelClock
+                        << ",\"hActive\":"
+                        << display.Display_Timing_Info.HActive
+                        << ",\"vActive\":"
+                        << display.Display_Timing_Info.VActive
+                        << ",\"hTotal\":"
+                        << display.Display_Timing_Info.HTotal
+                        << ",\"vTotal\":"
+                        << display.Display_Timing_Info.VTotal
+                        << ",\"hBlank\":"
+                        << display.Display_Timing_Info.HBlank
+                        << ",\"vBlank\":"
+                        << display.Display_Timing_Info.VBlank
+                        << ",\"hSync\":"
+                        << display.Display_Timing_Info.HSync
+                        << ",\"vSync\":"
+                        << display.Display_Timing_Info.VSync
+                        << ",\"refreshRate\":"
+                        << display.Display_Timing_Info.RefreshRate
+                        << ",\"signalStandard\":"
+                        << display.Display_Timing_Info.SignalStandard
+                        << ",\"vicId\":"
+                        << static_cast<unsigned int>(
+                            display.Display_Timing_Info.VicId)
+                        << "}";
+                }
+
+                if (ctlGetSetWireFormat != nullptr)
+                {
+                    get_set_wire_format_config_t wire = {};
+                    wire.Size = sizeof(wire);
+                    wire.Operation = 0;
+
+                    for (auto& supported :
+                         wire.SupportedWireFormat)
+                    {
+                        supported.Size =
+                            sizeof(supported);
+                    }
+
+                    wire.WireFormat.Size =
+                        sizeof(wire.WireFormat);
+
+                    const result_t wireResult =
+                        ctlGetSetWireFormat(
+                            displays[displayIndex],
+                            &wire);
+
+                    json
+                        << ",\"wireFormatResult\":"
+                        << wireResult;
+
+                    if (wireResult == RESULT_SUCCESS)
+                    {
+                        json
+                            << ",\"wireFormat\":{"
+                            << "\"colorModel\":"
+                            << wire.WireFormat.ColorModel
+                            << ",\"colorModelName\":\""
+                            << IgclWireColorModelLabel(
+                                wire.WireFormat.ColorModel)
+                            << "\""
+                            << ",\"colorDepthFlags\":"
+                            << wire.WireFormat.ColorDepth
+                            << "}";
+                    }
+                }
+
+                json << "}";
+            }
+
+            json << "]}";
+        }
+
+        json << "]}";
+
+        ctlClose(api);
+        FreeLibrary(module);
+
+        HMODULE nvapi = LoadLibraryExW(
+            L"nvapi64.dll",
+            nullptr,
+            LOAD_LIBRARY_SEARCH_SYSTEM32);
+
+        json
+            << ",\"nvidia\":{"
+            << "\"available\":"
+            << (nvapi != nullptr
+                ? "true"
+                : "false")
+            << ",\"library\":\"nvapi64.dll\""
+            << ",\"note\":\"NVAPI deep probe is the next vendor module\"";
+
+        if (nvapi == nullptr)
+            json << ",\"loadError\":" << GetLastError();
+
+        json << "}}";
+
+        if (nvapi != nullptr)
+            FreeLibrary(nvapi);
+
+        jsonText = json.str();
+        return KS_OK;
+    }
 
     int BuildDisplayPipelinesJson(std::string& jsonText)
     {
@@ -1867,6 +2483,29 @@ KS_API int KS_CALL KS_ListDevicesJson(
 
     std::string jsonText;
     const int status = BuildDevicesJson(jsonText);
+    if (status != KS_OK)
+        return status;
+
+    return CopyTextResult(
+        jsonText,
+        buffer,
+        bufferBytes);
+}
+
+KS_API int KS_CALL KS_ListVendorPipelinesJson(
+    char* buffer,
+    uint32_t* bufferBytes)
+{
+    g_LastError.clear();
+
+    if (bufferBytes == nullptr)
+    {
+        SetError("bufferBytes is null.");
+        return KS_INVALID_ARGUMENT;
+    }
+
+    std::string jsonText;
+    const int status = BuildVendorPipelinesJson(jsonText);
     if (status != KS_OK)
         return status;
 
